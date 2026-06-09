@@ -5,3 +5,17 @@ __pycache__/
 *.pyc
 *.pyo
 .DS_Store
+
+# sentence-transformers 모델 캐시
+.cache/
+models/
+
+# 업로드 임시 파일
+uploads/
+tmp/
+
+# IDE
+.idea/
+.vscode/
+
+.env

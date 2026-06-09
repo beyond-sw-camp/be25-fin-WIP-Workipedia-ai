@@ -1,12 +1,9 @@
 from fastapi import FastAPI
-from app.routers import chat, ingest
+
+from app.api.v1.router import router as v1_router
+from app.common.exceptions import WorkipediaException, workipedia_exception_handler
 
 app = FastAPI(title="Workipedia AI Server")
 
-app.include_router(chat.router)
-app.include_router(ingest.router)
-
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+app.include_router(v1_router)
+app.add_exception_handler(WorkipediaException, workipedia_exception_handler)
