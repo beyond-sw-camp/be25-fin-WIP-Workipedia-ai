@@ -1,14 +1,14 @@
 # Workipedia AI Architecture Overview
 
 > 상태: Draft  
-> 최종 수정: 2026-06-11
+> 최종 수정: 2026-06-12
 
 ## 핵심 원칙
 
 - 지식 제공은 RAG로 통일한다.
 - QLoRA와 LangGraph는 사용하지 않는다.
 - 고객사별로 별도 배포하고 로컬/클라우드 차이는 provider 추상화와 배포 설정으로 처리한다.
-- 민감정보는 저장과 모델 호출 전에 마스킹한다.
+- 민감정보는 AI 로그·Vector Store 저장과 모델 호출 전에 마스킹한다.
 - 구조화된 실시간 데이터는 Tool Integration으로 조회한다.
 
 ## 폴백 파이프라인
@@ -88,6 +88,8 @@ API Layer
    ├─ LlmProvider
    └─ EmbeddingProvider
 ```
+
+`SensitiveDataMasker`는 도메인에 종속되지 않는 `app/common/masking.py`에 두고 인덱싱과 질의 경로가 공유한다. 마스킹 실패는 공통 `MaskingBlockedError`로 변환하며, 오케스트레이터는 이를 `BLOCKED` 상태로 처리한다.
 
 ## Provider 추상화
 

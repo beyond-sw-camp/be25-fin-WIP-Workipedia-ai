@@ -4,8 +4,8 @@
 > 상태: Draft
 > 정본 위치: `docs/domain-guides/chatbot-rag.md`
 > 관련 문서: `docs/adr/rag-strategy.md`, `docs/adr/local-llm-security-strategy.md`, `docs/reference/ai-architecture-overview.md`
-> 버전: v0.4
-> 최종 수정: 2026-06-11
+> 버전: v0.5
+> 최종 수정: 2026-06-12
 
 ## 개발 목표
 
@@ -50,10 +50,47 @@
 ## 권한/보안 체크
 
 - 출처 없는 답변 금지
-- 개인정보 저장 전 마스킹
+- AI 로그·Vector Store 저장 전 마스킹
 - 클라우드 provider 호출 전 민감정보 마스킹
 - 근거 부족 시 그럴듯한 답변 생성 금지
 - QLoRA 및 파인튜닝 파이프라인은 사용하지 않는다.
+
+## 민감정보 마스킹
+
+`app/common/masking.py`의 `SensitiveDataMasker`를 인덱싱 경로와 챗봇 질의 경로에서 공용으로 사용한다. BE RDB에는 권한이 통제된 업무 원문을 저장할 수 있지만, AI 로그·Vector Store·클라우드 provider에는 마스킹 전 원문을 남기거나 전달하지 않는다.
+
+기본 패턴:
+
+| 대상 | 마스킹 토큰 | 활성 조건 |
+|---|---|---|
+| 주민등록번호 | `[주민번호]` | 항상 활성 |
+| 16자리 카드번호 | `[카드번호]` | 항상 활성 |
+| 전화번호 | `[전화번호]` | `MASKING_PHONE_ENABLED=true` |
+| 이메일 | `[이메일]` | `MASKING_EMAIL_ENABLED=true` |
+
+- `MASKING_ENABLED=false`이면 전체 마스킹을 건너뛴다.
+- 이미 치환된 마스킹 토큰은 그대로 통과시켜 재인덱싱 시 이중 마스킹을 방지한다.
+- 계좌번호는 형식이 다양하고 오탐 위험이 커 별도 정책 확정 후 추가한다.
+- 패턴은 생성자에 주입할 수 있어 테스트와 고객사별 확장이 가능하다.
+- 탐지된 원문 값은 로그에 기록하지 않는다. 마스킹 적용 여부와 토큰 유형만 기록할 수 있다.
+
+마스킹 처리 중 오류가 발생하면 `app/common/exceptions.py`의 `MaskingBlockedError`를 발생시킨다.
+
+```text
+인덱싱 경로
+DocumentService
+→ SensitiveDataMasker.mask()
+→ MaskingBlockedError
+→ 인덱싱 중단 및 오류 응답
+
+챗봇 경로
+RagOrchestrator
+→ SensitiveDataMasker.mask()
+→ MaskingBlockedError
+→ BLOCKED 안전 응답 후 종료
+```
+
+호출 서비스 계층이 `MaskingBlockedError`를 처리하며, 마스킹 모듈은 예외를 공통 예외 타입으로 변환해 전달한다.
 
 ## Chunking 책임
 
