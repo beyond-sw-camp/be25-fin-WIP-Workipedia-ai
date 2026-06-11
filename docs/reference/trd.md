@@ -55,7 +55,7 @@
 | Embedding | 고객사 설정에 따라 로컬 또는 클라우드 provider 선택 |
 | 메시지 브로커 | Kafka (이벤트 기반 알림 등) |
 | 실시간 통신 | Spring WebSocket + STOMP (Flash Chat), SSE/폴링 fallback (알림) |
-| 배치 | Spring Scheduler/Quartz 우선 |
+| 배치 | BE Spring Scheduler (`@Scheduled`) |
 | 인프라 | Docker, Kubernetes(선택), CI/CD: GitHub Actions |
 | 모니터링 | Prometheus + Grafana, 로그: ELK / Loki |
 
@@ -372,7 +372,7 @@ WebSocket/STOMP:
 | 비밀번호 | 8자 이상 영문+숫자 / BCrypt 저장 |
 | 인증 | JWT(짧은 Access + Refresh), HttpOnly 쿠키 또는 헤더 |
 | 권한 검사 | 모든 변경 API에서 USER/TEAM_ADMIN/SYSTEM_ADMIN/부서원 권한 명시 검증 |
-| 개인정보 마스킹 | KNOIT_007 — 저장 및 모델 호출 전에 주민번호/연락처/계좌 등 민감정보 마스킹 |
+| 개인정보 마스킹 | KNOIT_007 — AI가 모델 호출과 Vector Store 저장 전에 주민번호/연락처/계좌 등 민감정보 마스킹 |
 | 개인정보 답변 거부 | KNOIT_008 — LLM 응답 후처리에 개인정보 유출 검사 |
 | Flash Chat 임시성 | 메시지는 Redis TTL로 삭제하며 영구 DB에 저장하지 않음 |
 | 파일 첨부 | 이미지 MIME/크기 제한, 저장 경로 직접 노출 금지, 고객사별 S3/MinIO adapter 선택 |

@@ -11,17 +11,26 @@
 - 민감정보는 저장과 모델 호출 전에 마스킹한다.
 - 구조화된 실시간 데이터는 Tool Integration으로 조회한다.
 
-## A→B→C→D 폴백
+## 폴백 파이프라인
+
+폴백 순서: A 매뉴얼 → B 워키 → C 지식화 게시판 → D Tool Calling → E 수기 지식
 
 ```text
-A. 매뉴얼/워키 RAG
+A. 매뉴얼 RAG
 → 실패
-B. 등록된 Tool 호출
+B. 워키 RAG
 → 실패
-C. 해결된 티켓 이력 RAG
+C. TEAM_ADMIN 승인 지식화 게시판 RAG
 → 실패
-D. 요청 티켓 생성
+D. 등록된 Tool 호출
+→ 실패
+E. SYSTEM_ADMIN 수기 지식 RAG
+→ 실패
+요청 티켓 생성 전환 액션
 ```
+
+- 해결된 티켓 이력은 별도 단계가 아니며 TEAM_ADMIN 승인 지식화 게시판(C)으로만 반영한다.
+- 각 RAG 단계는 소스별 collection을 독립 조회하고 구조화된 실행 상태에 따라 다음 단계로 이동한다.
 
 구현은 LangGraph 대신 명시적인 Python for-loop와 if-else를 사용한다.
 
@@ -65,10 +74,12 @@ LLM 응답 문자열에서 특정 문구를 찾는 방식은 보조 수단으로
 API Layer
 └─ Orchestrator
    ├─ SensitiveDataMasker
-   ├─ RagRetriever
+   ├─ ManualRetriever
+   ├─ WorkiRetriever
+   ├─ KnowledgeDataRetriever
+   ├─ ManualKnowledgeRetriever
    ├─ ManualKnowledgeIndexer
    ├─ ToolSelector
-   ├─ TicketHistoryRetriever
    ├─ DepartmentRoutingService
    ├─ CrossEncoderReranker
    ├─ LlmProvider
@@ -97,7 +108,7 @@ EmbeddingProvider
 - 수기 지식 chunking과 Vector Store 동기화
 - 매뉴얼, 워키, 수기 지식, 승인된 지식화 문서, 승인된 라우팅 사례의 chunking
 - 출처 기반 답변 생성
-- Tool 선택과 결과 해석
+- Tool 선택, 결과 마스킹과 해석
 - 폴백 오케스트레이션
 - 관리자 작성 부서 R&R과 승인된 처리 사례 기반 후보 검색
 - Cross-Encoder 기반 문서 및 부서 후보 reranking

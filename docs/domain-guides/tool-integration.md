@@ -16,7 +16,7 @@
 ```text
 LLM이 API Tool 선택
 → BE가 고객사 API 호출
-→ 결과 마스킹
+→ AI가 결과 마스킹
 → LLM이 최종 답변 생성
 ```
 
@@ -29,7 +29,7 @@ LLM이 API Tool 선택
 ```text
 LLM이 DB Tool 선택
 → BE가 사전 등록된 쿼리 템플릿 실행
-→ 조회 결과 마스킹
+→ AI가 조회 결과 마스킹
 → LLM이 최종 답변 생성
 ```
 
@@ -89,8 +89,9 @@ DB에서 활성 Tool 정의 조회
 → LLM에 Tool 목록 바인딩
 → LLM이 Tool과 인자 선택
 → 서버가 허용 범위 검증
-→ HTTP/DB adapter 실행
-→ 민감정보 마스킹
+→ AI가 BE의 `POST /internal/ai-tools/{toolId}/execute` 호출
+→ BE가 HTTP/DB adapter 실행
+→ AI가 민감정보 마스킹
 → 결과를 LLM에 전달
 → 최종 답변 생성
 ```
@@ -106,7 +107,8 @@ DB에서 활성 Tool 정의 조회
 - 임의 SQL 생성 금지
 - 허용된 View 또는 컬럼만 조회
 - timeout과 최대 결과 건수 설정
-- 호출자, Tool, 파라미터, 결과 건수를 감사 로그에 기록
+- 호출자, Tool, 마스킹된 파라미터, 결과 건수, 실행 시간과 상태만 감사 로그에 기록
+- credential과 Tool 결과 원문은 감사 로그에 기록하지 않음
 
 ## 오류 처리
 
@@ -119,5 +121,5 @@ Tool 실행 결과도 공통 상태인 `SUCCESS`, `NO_RESULT`, `ERROR`, `BLOCKED
 
 ## 구현 경계
 
-- AI 레포: 활성·승인된 Tool 선택, 입력 스키마 검증, Tool 결과 기반 답변
+- AI 레포: 활성·승인된 Tool 선택, 입력 스키마 검증, Tool 결과 마스킹과 답변 생성
 - BE 레포: Tool 정의 CRUD, 권한과 승인 상태, 인증정보 보관, 실제 HTTP/DB 호출과 감사 로그
