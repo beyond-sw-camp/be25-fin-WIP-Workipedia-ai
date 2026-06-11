@@ -53,7 +53,7 @@
 | 세션/임시 메시지 저장 | Redis (Refresh Token, Flash Chat TTL 메시지 저장) — ADR 003 참조 |
 | LLM | 고객사 설정에 따라 로컬 또는 클라우드 provider 선택 |
 | Embedding | 고객사 설정에 따라 로컬 또는 클라우드 provider 선택 |
-| 메시지 브로커 | Kafka (이벤트 기반 알림 등) |
+| 메시지 브로커 | BE RabbitMQ (알림·포인트·ESG 비동기 이벤트) |
 | 실시간 통신 | Spring WebSocket + STOMP (Flash Chat), SSE/폴링 fallback (알림) |
 | 배치 | BE Spring Scheduler (`@Scheduled`) |
 | 인프라 | Docker, Kubernetes(선택), CI/CD: GitHub Actions |
@@ -61,12 +61,14 @@
 
 ### 2.3 RAG 파이프라인
 
-1. **인덱싱(이벤트 기반 + 일일 정합성 점검)** — KNOIT_006
-   - 매뉴얼·워키·수기 지식·승인 지식·라우팅 사례의 생성/수정/삭제 이벤트 수신
+1. **인덱싱(BE `ai_sync_jobs` + 일일 정합성 점검)** — KNOIT_006
+   - BE `@Scheduled` 워커가 매뉴얼·워키·수기 지식·승인 지식·라우팅 사례의 변경 작업을 AI API로 전달
    - AI 서버가 매뉴얼, 워키, 수기 지식, 승인된 지식화 문서, 승인된 라우팅 사례를 문서 유형별로 분할
    - 생성된 chunk → `worki_chunks`, `manual_chunks` 등 chunk 테이블에 저장
    - 선택된 Embedding provider로 임베딩 생성 → ChromaDB에 upsert
    - 일일 배치는 누락·실패 데이터 재처리와 RDB/ChromaDB 정합성 점검에 사용
+
+AI 서버는 RabbitMQ를 직접 구독하지 않는다. BE가 `ai_sync_jobs`를 기준으로 AI HTTP API를 호출한다.
 
 2. **질의 처리(실시간)** — KNOIT_001~003
    - 사용자 질문 → 민감정보 탐지 및 마스킹(KNOIT_007/008)
