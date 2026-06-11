@@ -1,0 +1,52 @@
+services:
+  ollama:
+    image: ollama/ollama:0.30.7
+    container_name: workipedia-ollama
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - workipedia-ollama-data:/root/.ollama
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  ollama-init:
+    image: ollama/ollama:0.30.7
+    container_name: workipedia-ollama-init
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama pull ${CHAT_MODEL:-llama3.1:8b}
+        ollama pull ${EMBEDDING_MODEL:-bge-m3}
+    restart: "no"
+
+  chromadb:
+    image: chromadb/chroma:1.5.9
+    container_name: workipedia-chromadb
+    restart: unless-stopped
+    ports:
+      - "${CHROMA_PORT:-8001}:8000"
+    volumes:
+      - workipedia-chroma-data:/chroma/chroma
+    environment:
+      IS_PERSISTENT: "TRUE"
+      TZ: ${TZ:-Asia/Seoul}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/v1/heartbeat || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  workipedia-ollama-data:
+  workipedia-chroma-data:
