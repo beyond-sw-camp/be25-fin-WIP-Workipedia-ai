@@ -70,19 +70,22 @@ AI 서버 구현과 BE 챗봇 연동의 주 담당은 김진혁이다. 관리자
 
 ### Fallback Pipeline
 
-폴백 순서는 A 매뉴얼 → B 워키 → C 지식화 게시판 → D Tool Calling → E 수기 지식이다.
+폴백 순서는 A 매뉴얼 → B 워키 → C 지식 RAG → D Tool Calling이다.
 
 ```text
 A. 매뉴얼 RAG
 → B. 워키 RAG
-→ C. TEAM_ADMIN 승인 지식화 게시판 RAG
+→ C. 지식 RAG
+   - TEAM_ADMIN 승인 지식화 게시판(`KNOWLEDGE_DATA`)
+   - SYSTEM_ADMIN 수기 지식(`MANUAL_KNOWLEDGE`)
 → D. 등록된 Tool 호출
-→ E. SYSTEM_ADMIN 수기 지식 RAG
 → 모두 실패하면 요청 티켓 생성 전환 액션
 ```
 
 - 해결된 티켓 이력은 별도 검색 단계가 아니며, TEAM_ADMIN이 승인한 지식화 게시판(C)으로만 검색에 반영한다.
-- 각 RAG 단계는 소스별 collection을 독립 조회하며 앞 단계가 `NO_RESULT` 또는 재시도 불가능한 `ERROR`일 때 다음 단계로 이동한다.
+- `knowledge_data`와 `manual_knowledge`는 DB·`sourceType`·collection을 분리한다.
+- C단계는 두 collection을 독립 조회한 뒤 후보를 합쳐 통합 reranking한다.
+- 각 단계는 앞 단계가 `NO_RESULT` 또는 재시도 불가능한 `ERROR`일 때 다음 단계로 이동한다.
 
 - LangGraph 대신 명시적인 Python for-loop와 if-else로 구현한다.
 - 단계별 결과는 `SUCCESS`, `NO_RESULT`, `ERROR`, `BLOCKED`로 통일한다.
@@ -101,7 +104,7 @@ A. 매뉴얼 RAG
 ### RAG
 
 - AI 서버가 문서 파싱, 민감정보 마스킹, 청킹, 임베딩, Vector Store 저장을 담당한다.
-- 대상은 매뉴얼(a), 워키(b), 승인된 지식화 문서(c), 수기 지식(e), 승인된 라우팅 사례(부서 라우팅 전용)다.
+- 대상은 매뉴얼(A), 워키(B), 승인된 지식화 문서와 수기 지식(C), 승인된 라우팅 사례(부서 라우팅 전용)다.
 - Vector Search로 후보를 넓게 검색한 뒤 로컬 Cross-Encoder로 재정렬한다.
 - Reranker는 후보별 `candidate_id`, 원본 `score`, `rank`를 반환한다.
 - 점수는 모델별 원본 값이며, 정규화 전에는 `0~1` 범위라고 가정하지 않는다.
@@ -153,7 +156,7 @@ A. 매뉴얼 RAG
 - Cross-Encoder reranking
 - 근거 기반 답변 생성
 - Tool 선택과 결과 해석
-- 매뉴얼 → 워키 → 지식화 게시판 → Tool → 수기 지식 순차 폴백 orchestration
+- 매뉴얼 → 워키 → 지식 RAG → Tool 순차 폴백 orchestration
 - 부서 후보 검색과 추천
 - 민감정보 탐지·마스킹
 

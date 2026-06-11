@@ -1,7 +1,7 @@
 # Workipedia AI Architecture Overview
 
 > 상태: Draft  
-> 최종 수정: 2026-06-09
+> 최종 수정: 2026-06-11
 
 ## 핵심 원칙
 
@@ -13,24 +13,26 @@
 
 ## 폴백 파이프라인
 
-폴백 순서: A 매뉴얼 → B 워키 → C 지식화 게시판 → D Tool Calling → E 수기 지식
+폴백 순서: A 매뉴얼 → B 워키 → C 지식 RAG → D Tool Calling
 
 ```text
 A. 매뉴얼 RAG
 → 실패
 B. 워키 RAG
 → 실패
-C. TEAM_ADMIN 승인 지식화 게시판 RAG
+C. 지식 RAG
+   - TEAM_ADMIN 승인 지식화 게시판(`KNOWLEDGE_DATA`)
+   - SYSTEM_ADMIN 수기 지식(`MANUAL_KNOWLEDGE`)
 → 실패
 D. 등록된 Tool 호출
-→ 실패
-E. SYSTEM_ADMIN 수기 지식 RAG
 → 실패
 요청 티켓 생성 전환 액션
 ```
 
 - 해결된 티켓 이력은 별도 단계가 아니며 TEAM_ADMIN 승인 지식화 게시판(C)으로만 반영한다.
-- 각 RAG 단계는 소스별 collection을 독립 조회하고 구조화된 실행 상태에 따라 다음 단계로 이동한다.
+- `knowledge_data`와 `manual_knowledge`는 DB·`sourceType`·collection을 분리한다.
+- C단계는 두 collection을 독립 조회한 뒤 후보를 합쳐 통합 reranking한다.
+- 각 단계는 구조화된 실행 상태에 따라 다음 단계로 이동한다.
 
 구현은 LangGraph 대신 명시적인 Python for-loop와 if-else를 사용한다.
 
@@ -40,7 +42,7 @@ for route in route_order:
     if result.is_success:
         return result
 
-return create_ticket(request)
+return create_transition_action(request)
 ```
 
 각 단계는 자유 텍스트가 아니라 공통 실행 상태를 반환한다.
@@ -76,8 +78,9 @@ API Layer
    ├─ SensitiveDataMasker
    ├─ ManualRetriever
    ├─ WorkiRetriever
-   ├─ KnowledgeDataRetriever
-   ├─ ManualKnowledgeRetriever
+   ├─ KnowledgeRetriever
+   │  ├─ KnowledgeDataRetriever
+   │  └─ ManualKnowledgeRetriever
    ├─ ManualKnowledgeIndexer
    ├─ ToolSelector
    ├─ DepartmentRoutingService

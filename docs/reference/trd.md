@@ -83,7 +83,17 @@ AI 서버는 RabbitMQ를 직접 구독하지 않는다. BE가 `ai_sync_jobs`를 
    - 사용자 불만족 피드백 → 워키 질문 등록 흐름으로 분기
    - 실제 처리나 공식 확인이 필요한 경우 → 요청 티켓 생성 흐름으로 분기, 챗봇 입력 내용을 요청 초안으로 전달
 
-4. **지식화 발행과 Vector Store 동기화**
+4. **A→B→C→D 폴백 오케스트레이션**
+   - A: 매뉴얼 RAG
+   - B: 워키 RAG
+   - C: 지식 RAG
+     - TEAM_ADMIN 승인 지식화 게시판(`KNOWLEDGE_DATA`)
+     - SYSTEM_ADMIN 수기 지식(`MANUAL_KNOWLEDGE`)
+   - D: 등록된 API 또는 승인 DB Query Tool
+   - `knowledge_data`와 `manual_knowledge`는 DB·`sourceType`·collection을 분리하고 C단계 검색 결과만 통합 reranking
+   - 모든 단계 실패 시 워키 등록 또는 요청 티켓 생성 전환 액션 반환
+
+5. **지식화 발행과 Vector Store 동기화**
    - TEAM_ADMIN 승인 트랜잭션에서 지식 문서와 `PENDING` 동기화 상태를 RDB에 저장
    - RDB 커밋 후 비동기 작업이 마스킹, 청킹, 임베딩, Vector Store upsert 수행
    - 성공 시 `SYNCED`, 실패 시 `FAILED`와 실패 사유 저장

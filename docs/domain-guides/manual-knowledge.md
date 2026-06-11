@@ -1,7 +1,7 @@
 # Manual Knowledge Management
 
 > 상태: Draft  
-> 최종 수정: 2026-06-09
+> 최종 수정: 2026-06-11
 
 ## 목적
 
@@ -34,10 +34,11 @@ SYSTEM_ADMIN 등록·수정
 → AI가 민감정보 탐지 및 마스킹
 → 마스킹된 텍스트를 chunking 및 embedding
 → Vector Store upsert
-→ RAG 검색에 반영
+→ 챗봇 C단계의 `MANUAL_KNOWLEDGE` 검색 소스에 반영
 ```
 
 삭제 또는 비활성화 시 Vector Store에서도 해당 문서와 청크를 제거한다.
+`manual_knowledge`는 `knowledge_data`와 DB·`sourceType`·collection을 분리하고, 두 검색 결과는 챗봇 C단계에서만 병합·reranking한다.
 
 ## 동기화 정책
 

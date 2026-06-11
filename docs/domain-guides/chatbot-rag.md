@@ -4,8 +4,8 @@
 > 상태: Draft
 > 정본 위치: `docs/domain-guides/chatbot-rag.md`
 > 관련 문서: `docs/adr/rag-strategy.md`, `docs/adr/local-llm-security-strategy.md`, `docs/reference/ai-architecture-overview.md`
-> 버전: v0.3
-> 최종 수정: 2026-06-09
+> 버전: v0.4
+> 최종 수정: 2026-06-11
 
 ## 개발 목표
 
@@ -32,6 +32,7 @@
 - RAG 기반 지식 제공
 - SYSTEM_ADMIN용 custom_prompt 내용·활성 상태 관리
 - 출처 최신성 표시
+- A 매뉴얼 → B 워키 → C 지식 RAG → D Tool Calling 폴백
 
 ## API/DB 영향
 
@@ -40,6 +41,7 @@
 - `chatbot_messages.references_json`
 - `ai_prompt_settings` (`custom_prompt`만 관리자 편집)
 - `knowledge_data`
+- `manual_knowledge`
 - manual/worki chunks
 - embedding adapter
 - chatbot query API
@@ -110,6 +112,22 @@ RAG 단계는 다음 구조화 결과를 반환한다.
 - `BLOCKED`: 민감정보 마스킹 또는 보안 정책 실패
 
 `NO_RESULT`와 재시도 불가능한 `ERROR`는 다음 폴백 단계로 이동한다. `BLOCKED`는 안전 응답 후 종료한다.
+
+## 폴백 단계
+
+```text
+A. 매뉴얼 RAG
+→ B. 워키 RAG
+→ C. 지식 RAG
+   - TEAM_ADMIN 승인 지식화 게시판(`KNOWLEDGE_DATA`)
+   - SYSTEM_ADMIN 수기 지식(`MANUAL_KNOWLEDGE`)
+→ D. Tool Calling
+→ 모두 실패하면 워키 등록 또는 요청 티켓 생성 전환 액션
+```
+
+- `knowledge_data`와 `manual_knowledge`는 DB·`sourceType`·collection을 통합하지 않는다.
+- C단계에서 두 collection의 검색 후보만 합쳐 통합 reranking한다.
+- D단계 `NO_RESULT` 또는 재시도 불가능한 `ERROR`는 다음 검색 단계가 아니라 최종 전환 액션으로 처리한다.
 
 ## 완료 기준
 
