@@ -46,6 +46,18 @@ app/
 | 수기 지식 | `docs/domain-guides/manual-knowledge.md` |
 | 참고 레포 분석 | `docs/temp/b2b-agent-analysis.md` |
 
+## 팀원 & 담당 도메인
+
+| 이름 | 도메인 |
+|---|---|
+| 김진혁 | 티켓, AI/RAG 연동, 챗봇 답변·세션·메시지 저장, 지식화, CI/CD |
+| 이슬이 | Auth, 사용자 관리, 보안, 알림, 포인트, ESG 등급·지표 |
+| 민정기 | 워키 게시판, FAQ, Elasticsearch, 매뉴얼, 프론트엔드 |
+| 김가영 | 관리자 기능, 부서 관리, 관리자 대시보드 |
+| 황희수 | 프론트엔드 공동 담당 |
+
+AI 서버 구현과 BE 챗봇 연동의 주 담당은 김진혁이다. 관리자 기능의 세부 도메인은 사용자 관리 이슬이, 매뉴얼 민정기, 부서 관리 김가영의 담당 경계를 우선한다.
+
 ## Architecture Contract
 
 ### 고객사별 배포
@@ -53,17 +65,24 @@ app/
 - 고객사마다 서버를 별도로 배포한다.
 - 로컬/클라우드 LLM과 Embedding 차이는 provider interface와 환경설정으로 분리한다.
 - 하나의 서버에서 tenant별 provider를 런타임 변경하지 않는다.
-- 민감정보는 저장과 모델 호출 전에 마스킹하며 원문은 보관하지 않는다.
+- 민감정보 마스킹은 AI 서버가 전담하며, 모델 호출 전과 Vector Store 저장 전에 수행한다. BE RDB에는 원문을 저장하되 Vector Store와 외부 LLM에는 마스킹된 텍스트만 전달한다.
 - QLoRA와 LangGraph는 사용하지 않는다.
 
-### A→B→C→D Pipeline
+### Fallback Pipeline
+
+폴백 순서는 A 매뉴얼 → B 워키 → C 지식화 게시판 → D Tool Calling → E 수기 지식이다.
 
 ```text
-A. 매뉴얼/워키 RAG
-→ B. 등록된 Tool 호출
-→ C. 해결된 티켓 이력 RAG
-→ D. 요청 티켓 생성
+A. 매뉴얼 RAG
+→ B. 워키 RAG
+→ C. TEAM_ADMIN 승인 지식화 게시판 RAG
+→ D. 등록된 Tool 호출
+→ E. SYSTEM_ADMIN 수기 지식 RAG
+→ 모두 실패하면 요청 티켓 생성 전환 액션
 ```
+
+- 해결된 티켓 이력은 별도 검색 단계가 아니며, TEAM_ADMIN이 승인한 지식화 게시판(C)으로만 검색에 반영한다.
+- 각 RAG 단계는 소스별 collection을 독립 조회하며 앞 단계가 `NO_RESULT` 또는 재시도 불가능한 `ERROR`일 때 다음 단계로 이동한다.
 
 - LangGraph 대신 명시적인 Python for-loop와 if-else로 구현한다.
 - 단계별 결과는 `SUCCESS`, `NO_RESULT`, `ERROR`, `BLOCKED`로 통일한다.
@@ -82,7 +101,7 @@ A. 매뉴얼/워키 RAG
 ### RAG
 
 - AI 서버가 문서 파싱, 민감정보 마스킹, 청킹, 임베딩, Vector Store 저장을 담당한다.
-- 대상은 매뉴얼, 워키, 수기 지식, 승인된 지식화 문서, 승인된 라우팅 사례다.
+- 대상은 매뉴얼(a), 워키(b), 승인된 지식화 문서(c), 수기 지식(e), 승인된 라우팅 사례(부서 라우팅 전용)다.
 - Vector Search로 후보를 넓게 검색한 뒤 로컬 Cross-Encoder로 재정렬한다.
 - Reranker는 후보별 `candidate_id`, 원본 `score`, `rank`를 반환한다.
 - 점수는 모델별 원본 값이며, 정규화 전에는 `0~1` 범위라고 가정하지 않는다.
@@ -96,8 +115,8 @@ A. 매뉴얼/워키 RAG
 - API가 없는 고객사는 개발자가 검증한 DB Query Tool을 사용할 수 있다.
 - LLM은 승인·활성화된 Tool과 입력 인자만 선택한다.
 - LLM이 SQL을 생성하거나 수정하지 않는다.
-- BE가 Tool 정의, 인증정보 참조, 실제 HTTP/DB 실행, 결과 마스킹과 감사 로그를 담당한다.
-- AI 서버는 Tool 선택, 입력 스키마 검증, 결과 해석과 답변 생성을 담당한다.
+- BE가 Tool 정의, 인증정보 참조, 실제 HTTP/DB 실행과 감사 로그를 담당한다.
+- AI 서버는 Tool 선택, 입력 스키마 검증, 결과 마스킹·해석과 답변 생성을 담당한다.
 
 ### Ticket Department Routing
 
@@ -134,7 +153,7 @@ A. 매뉴얼/워키 RAG
 - Cross-Encoder reranking
 - 근거 기반 답변 생성
 - Tool 선택과 결과 해석
-- A→B→C→D 폴백 orchestration
+- 매뉴얼 → 워키 → 지식화 게시판 → Tool → 수기 지식 순차 폴백 orchestration
 - 부서 후보 검색과 추천
 - 민감정보 탐지·마스킹
 
@@ -155,7 +174,7 @@ A. 매뉴얼/워키 RAG
 - Ollama/OpenAI LLM·Embedding adapter가 존재한다.
 - ChromaDB adapter와 기본 문서 chunker가 존재한다.
 - Cross-Encoder 설정은 존재하지만 실제 reranking 연결은 확인하며 구현한다.
-- A→B→C→D orchestrator와 Tool Calling, 티켓 부서 라우팅은 구현이 필요하다.
+- 폴백 orchestrator와 Tool Calling, 티켓 부서 라우팅은 구현이 필요하다.
 
 ## Development Commands
 

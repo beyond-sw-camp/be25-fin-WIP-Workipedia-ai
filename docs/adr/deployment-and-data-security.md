@@ -45,10 +45,10 @@ B사: LLM_PROVIDER=cloud, EMBEDDING_PROVIDER=cloud, OBJECT_STORAGE=s3
 
 ```text
 입력/수집
-→ 민감정보 탐지
-→ 유형별 마스킹
-→ 마스킹 결과 검증
 → DB 저장
+→ AI 서버 전달
+→ 민감정보 탐지·유형별 마스킹
+→ 마스킹 결과 검증
 → RAG 인덱싱 또는 LLM 호출
 ```
 
@@ -56,9 +56,10 @@ B사: LLM_PROVIDER=cloud, EMBEDDING_PROVIDER=cloud, OBJECT_STORAGE=s3
 
 - 주민등록번호, 계좌번호, 개인 연락처 등은 유형을 식별할 수 있는 토큰으로 치환한다.
 - 예: `900101-1234567` → `[RESIDENT_ID]`
-- 마스킹 전 원문은 기본적으로 DB와 로그에 저장하지 않는다.
+- 권한이 통제된 BE RDB에는 업무 원문을 저장할 수 있다.
+- 마스킹 전 원문은 AI 로그와 Vector Store에 저장하지 않는다.
 - 클라우드 provider에는 마스킹된 데이터만 전달한다.
-- 마스킹 실패 시 저장 또는 모델 호출을 중단할 수 있어야 한다.
+- 마스킹 처리 실패 시 Vector Store 저장 또는 모델 호출을 중단할 수 있어야 한다. BE RDB 원문 저장은 이 처리와 분리한다.
 
 ## Image Storage
 
