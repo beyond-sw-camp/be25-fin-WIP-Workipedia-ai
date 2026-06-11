@@ -4,10 +4,13 @@ from langchain_core.language_models import BaseChatModel
 from app.core.config import settings
 from .base import BaseLLMClient
 
+_TIMEOUT = 60
+
 
 class OllamaClient(BaseLLMClient):
     def get_model(self) -> BaseChatModel:
         return ChatOllama(
             base_url=settings.ollama_base_url,
             model=settings.chat_model,
+            timeout=_TIMEOUT,
         )
