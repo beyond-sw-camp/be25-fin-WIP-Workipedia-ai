@@ -15,14 +15,14 @@ class EmbeddingProvider(str, Enum):
 
 class Settings(BaseSettings):
     # LLM
-    llm_provider: LLMProvider = LLMProvider.OLLAMA
+    llm_provider: LLMProvider = LLMProvider.OPENAI
     ollama_base_url: str = "http://localhost:11434"
     chat_model: str = "llama3.1:8b"
     openai_api_key: str = ""
     openai_chat_model: str = "gpt-4o-mini"
 
     # Embedding
-    embedding_provider: EmbeddingProvider = EmbeddingProvider.OLLAMA
+    embedding_provider: EmbeddingProvider = EmbeddingProvider.OPENAI
     embedding_model: str = "bge-m3"
     openai_embedding_model: str = "text-embedding-3-small"
 
@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     retrieval_top_k: int = 20
     rerank_top_k: int = 5
     reranker_model: str = "bongsoo/kpf-cross-encoder-v1"
+
+    # Masking
+    masking_enabled: bool = True
+    masking_phone_enabled: bool = False
+    masking_email_enabled: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
