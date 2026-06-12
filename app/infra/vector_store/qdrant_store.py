@@ -11,7 +11,7 @@ from qdrant_client.models import (
     VectorParams,
 )
 
-from app.core.config import QDRANT_VECTOR_SIZE, RETRIEVAL_TOP_K, settings
+from app.core.config import EMBEDDING_DIM_MAP, RETRIEVAL_TOP_K, settings
 
 
 @dataclass
@@ -42,7 +42,7 @@ class QdrantStore:
             self.client.create_collection(
                 collection_name=name,
                 vectors_config=VectorParams(
-                    size=QDRANT_VECTOR_SIZE,
+                    size=EMBEDDING_DIM_MAP[settings.embedding_provider.value],
                     distance=Distance.COSINE,
                 ),
             )

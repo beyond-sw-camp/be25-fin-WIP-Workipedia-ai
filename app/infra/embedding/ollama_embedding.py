@@ -11,6 +11,6 @@ class OllamaEmbeddingClient(BaseEmbeddingClient):
     def get_embeddings(self) -> Embeddings:
         return OllamaEmbeddings(
             base_url=settings.ollama_base_url,
-            model=EMBEDDING_MODEL_MAP["ollama"],
+            model=EMBEDDING_MODEL_MAP["local"],
             timeout=_TIMEOUT,
         )

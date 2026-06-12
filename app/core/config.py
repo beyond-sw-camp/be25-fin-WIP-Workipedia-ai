@@ -41,7 +41,7 @@ settings = Settings()
 # LLM 모델명 매핑
 # ---------------------------------------------------------------------------
 CHAT_MODEL_MAP: dict[str, str] = {
-    "ollama": "llama3.1:8b",
+    "local": "llama3.1:8b",
     "openai": "gpt-4o-mini",
     "google": "gemini-1.5-flash",
     "anthropic": "claude-haiku-4-5-20251001",
@@ -51,11 +51,15 @@ CHAT_MODEL_MAP: dict[str, str] = {
 # Embedding 모델명 매핑 / 벡터 차원
 # ---------------------------------------------------------------------------
 EMBEDDING_MODEL_MAP: dict[str, str] = {
-    "ollama": "bge-m3",
+    "local": "bge-m3",
     "openai": "text-embedding-3-small",
     "google": "text-embedding-004",
 }
-QDRANT_VECTOR_SIZE = 1024  # bge-m3 기준; openai text-embedding-3-small은 1536
+EMBEDDING_DIM_MAP: dict[str, int] = {
+    "local": 1024,    # bge-m3
+    "openai": 1536,   # text-embedding-3-small
+    "google": 768,    # text-embedding-004
+}
 
 # ---------------------------------------------------------------------------
 # Vector Store collection 매핑

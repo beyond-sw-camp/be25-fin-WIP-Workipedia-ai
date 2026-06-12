@@ -11,6 +11,6 @@ class OllamaClient(BaseLLMClient):
     def get_model(self) -> BaseChatModel:
         return ChatOllama(
             base_url=settings.ollama_base_url,
-            model=CHAT_MODEL_MAP["ollama"],
+            model=CHAT_MODEL_MAP["local"],
             timeout=_TIMEOUT,
         )
