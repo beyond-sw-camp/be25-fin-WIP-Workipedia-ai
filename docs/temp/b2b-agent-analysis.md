@@ -1,6 +1,7 @@
 # B2B Enterprise AI Agent 분석 보고서
 > 레포: https://github.com/rhthrhrl0/b2b-enterprise-ai-agent  
 > 목적: Workipedia 적용 아이디어 추출
+> 상태: 외부 참고 프로젝트의 기존 ChromaDB 구조를 분석한 과거 자료이며, 현재 Workipedia Vector Store 결정은 Qdrant이다.
 
 ---
 

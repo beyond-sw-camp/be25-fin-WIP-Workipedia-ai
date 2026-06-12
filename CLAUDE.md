@@ -6,7 +6,7 @@ Workipedia의 RAG 챗봇, Tool Calling, 티켓 부서 라우팅을 담당하는 
 
 - Python, FastAPI, Uvicorn
 - LangChain
-- ChromaDB
+- Qdrant
 - Sentence Transformers Cross-Encoder
 - Ollama / OpenAI provider adapter
 - PyPDF, python-docx
@@ -175,7 +175,7 @@ A. 매뉴얼 RAG
 - FastAPI 기본 서버와 `/api/v1` router가 구성되어 있다.
 - chatbot, documents, embeddings endpoint가 존재한다.
 - Ollama/OpenAI LLM·Embedding adapter가 존재한다.
-- ChromaDB adapter와 기본 문서 chunker가 존재한다.
+- Qdrant adapter와 기본 문서 chunker가 존재한다.
 - Cross-Encoder 설정은 존재하지만 실제 reranking 연결은 확인하며 구현한다.
 - 폴백 orchestrator와 Tool Calling, 티켓 부서 라우팅은 구현이 필요하다.
 
