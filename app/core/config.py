@@ -94,3 +94,4 @@ MASKING_EMAIL_ENABLED = False
 RETRIEVAL_TOP_K = 20
 RERANK_TOP_K = 5
 RERANKER_MODEL = "bongsoo/kpf-cross-encoder-v1"
+RERANK_SCORE_THRESHOLD = 0.0  # 평가셋 확보 전 임시값. bongsoo/kpf-cross-encoder-v1 logit 기준, 0.0 미만이면 NO_RESULT
