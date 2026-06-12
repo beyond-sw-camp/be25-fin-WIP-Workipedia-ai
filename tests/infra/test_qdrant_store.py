@@ -6,7 +6,7 @@ def test_query_does_not_call_ensure_collection():
 
     store = QdrantStore()
     mock_client = MagicMock()
-    mock_client.search.return_value = []
+    mock_client.query_points.return_value = MagicMock(points=[])
     store._client = mock_client
 
     with patch.object(store, "_ensure_collection") as mock_ensure:
