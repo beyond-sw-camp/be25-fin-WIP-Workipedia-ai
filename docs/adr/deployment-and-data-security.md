@@ -33,8 +33,8 @@ AI Core
 예:
 
 ```text
-A사: LLM_PROVIDER=local, EMBEDDING_PROVIDER=local, OBJECT_STORAGE=minio
-B사: LLM_PROVIDER=cloud, EMBEDDING_PROVIDER=cloud, OBJECT_STORAGE=s3
+A사: LLM_PROVIDER=local, EMBEDDING_PROVIDER=ollama, OBJECT_STORAGE=minio
+B사: LLM_PROVIDER=fallback, EMBEDDING_PROVIDER=openai, OBJECT_STORAGE=s3
 ```
 
 ## Sensitive Data
@@ -54,9 +54,10 @@ B사: LLM_PROVIDER=cloud, EMBEDDING_PROVIDER=cloud, OBJECT_STORAGE=s3
 
 기본 정책:
 
-- 주민등록번호와 카드번호는 기본적으로 유형을 식별할 수 있는 토큰으로 치환한다.
-- 전화번호와 이메일은 고객사 정책에 따라 환경설정으로 활성화한다.
+- 주민등록번호와 카드번호는 항상 유형 토큰으로 치환한다.
 - 예: `900101-1234567` → `[주민번호]`
+- `WORKI` 인덱싱에서는 전화번호와 이메일을 추가로 마스킹한다.
+- 계좌번호는 오탐 정책 확정 전까지 자동 마스킹 대상에 포함하지 않는다.
 - 권한이 통제된 BE RDB에는 업무 원문을 저장할 수 있다.
 - 마스킹 전 원문은 AI 로그와 Vector Store에 저장하지 않는다.
 - 클라우드 provider에는 마스킹된 데이터만 전달한다.

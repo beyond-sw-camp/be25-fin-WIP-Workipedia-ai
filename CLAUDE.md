@@ -6,9 +6,10 @@ Workipedia의 RAG 챗봇, Tool Calling, 티켓 부서 라우팅을 담당하는 
 
 - Python, FastAPI, Uvicorn
 - LangChain
-- ChromaDB
+- Qdrant
 - Sentence Transformers Cross-Encoder
-- Ollama / OpenAI provider adapter
+- Ollama / OpenAI / Google Embedding adapter
+- Local(Ollama) / OpenAI / Google / Anthropic LLM adapter와 fallback 체인
 - PyPDF, python-docx
 
 ## Package Structure
@@ -23,8 +24,8 @@ app/
 │   ├── document/           # 문서 파싱, 청킹, 인덱싱
 │   └── rag/                # 검색, reranking, 답변, 폴백 orchestration
 └── infra/
-    ├── embedding/          # local/cloud embedding adapter
-    ├── llm/                # local/cloud LLM adapter
+    ├── embedding/          # Ollama/OpenAI/Google embedding adapter
+    ├── llm/                # Local/OpenAI/Google/Anthropic LLM adapter
     └── vector_store/       # Vector Store adapter
 ```
 
@@ -105,6 +106,10 @@ A. 매뉴얼 RAG
 
 - AI 서버가 문서 파싱, 민감정보 마스킹, 청킹, 임베딩, Vector Store 저장을 담당한다.
 - 대상은 매뉴얼(A), 워키(B), 승인된 지식화 문서와 수기 지식(C), 승인된 라우팅 사례(부서 라우팅 전용)다.
+- 문서 인덱싱 API는 `POST /api/v1/documents/ingest`, 삭제 API는 `DELETE /api/v1/documents/{source_id}?source_type=...`다.
+- `MANUAL`, `WORKI`, `KNOWLEDGE_DATA`, `MANUAL_KNOWLEDGE`는 각각 분리된 Qdrant collection에 저장한다.
+- 논리 chunk ID는 `{source_type}:{source_id}:{chunk_index}`이며 Qdrant point ID는 이를 UUID v5로 변환한다.
+- 재인덱싱은 임베딩 성공 후 기존 `doc_id` point를 삭제하고 새 point를 upsert한다.
 - Vector Search로 후보를 넓게 검색한 뒤 로컬 Cross-Encoder로 재정렬한다.
 - Reranker는 후보별 `candidate_id`, 원본 `score`, `rank`를 반환한다.
 - 점수는 모델별 원본 값이며, 정규화 전에는 `0~1` 범위라고 가정하지 않는다.
@@ -174,8 +179,11 @@ A. 매뉴얼 RAG
 
 - FastAPI 기본 서버와 `/api/v1` router가 구성되어 있다.
 - chatbot, documents, embeddings endpoint가 존재한다.
-- Ollama/OpenAI LLM·Embedding adapter가 존재한다.
-- ChromaDB adapter와 기본 문서 chunker가 존재한다.
+- Local(Ollama)/OpenAI/Google/Anthropic LLM adapter와 fallback 체인이 존재한다.
+- Ollama/OpenAI/Google Embedding adapter가 존재한다.
+- Qdrant adapter, source type별 chunker 설정, 문서 인덱싱·삭제 API가 존재한다.
+- 문서 서비스 단위 테스트 12개는 유효한 provider 환경값에서 통과한다.
+- 현재 `.env`의 `EMBEDDING_PROVIDER=local`은 최신 허용값과 맞지 않으므로 `ollama`로 변경해야 한다.
 - Cross-Encoder 설정은 존재하지만 실제 reranking 연결은 확인하며 구현한다.
 - 폴백 orchestrator와 Tool Calling, 티켓 부서 라우팅은 구현이 필요하다.
 

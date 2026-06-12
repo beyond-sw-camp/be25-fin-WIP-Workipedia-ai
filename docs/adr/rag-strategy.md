@@ -4,8 +4,8 @@
 > 상태: Accepted
 > 정본 위치: `docs/adr/rag-strategy.md`
 > 관련 문서: `docs/reference/trd.md`, `docs/adr/deployment-and-data-security.md`, `docs/domain-guides/chatbot-rag.md`
-> 버전: v0.3
-> 최종 수정: 2026-06-09
+> 버전: v0.4
+> 최종 수정: 2026-06-12
 
 ## Context
 
@@ -21,6 +21,17 @@ AI 지식 전략은 **RAG 중심 아키텍처**로 통일한다.
 - QLoRA와 별도 파인튜닝 파이프라인은 사용하지 않는다.
 - 답변 형식, 근거 부족 시 거절, 워키/티켓 전환, 개인정보 처리 규칙은 시스템 프롬프트와 코드 정책으로 제어한다.
 - 고객사에 따라 로컬 또는 클라우드 LLM/Embedding provider를 선택하되 RAG 파이프라인의 인터페이스는 유지한다.
+
+### Vector Store
+
+- AI Vector Store는 로컬 Docker 단일 노드 Qdrant를 사용한다.
+- MariaDB를 업무 데이터의 정본으로 유지하고 Qdrant는 재색인 가능한 검색 저장소로 취급한다.
+- 매뉴얼·워키·승인 지식·수기 지식·티켓 라우팅 사례는 데이터 유형과 수명주기에 따라 collection을 분리한다.
+- 각 point에는 `_chunk_id`, `text`, `doc_id`, `source_type`, `source_id`, `title`, `chunk_index` payload를 저장한다.
+- 검색 metric은 cosine similarity를 기본으로 사용한다.
+- 현재 collection vector size는 `bge-m3` 기준 1024로 고정한다. 다른 차원의 embedding provider를 운영에 적용하기 전 provider별 vector size와 재색인 절차를 구현한다.
+- point ID는 `{source_type}:{source_id}:{chunk_index}`를 기반으로 생성한 deterministic UUID를 사용한다.
+- Qdrant의 원본 score는 검색 후보 점수로 보존하고, Cross-Encoder reranking 점수와 혼합하지 않는다.
 
 우선 구현 대상:
 
@@ -40,7 +51,7 @@ AI 지식 전략은 **RAG 중심 아키텍처**로 통일한다.
 | 영역 | MVP 기준 | 후순위 |
 |---|---|---|
 | 임베딩 | 기본 `bge-m3`, 고객사별 provider adapter | 고성능 모델 교체 |
-| Vector Store | ChromaDB (로컬 persistent) | 고성능 managed vector DB |
+| Vector Store | Qdrant (로컬 persistent) | 고성능 managed vector DB |
 | 검색 | vector top-k + Cross-Encoder reranking | hybrid search, 평가셋 기반 임계값 개선 |
 | 답변 생성 | 검색 chunk 기반 template/local LLM 응답 | 고품질 프롬프트 튜닝 |
 | 행동 제어 | 시스템 프롬프트와 코드 정책 | 정책 버전 관리 및 평가셋 고도화 |
@@ -53,7 +64,8 @@ AI 지식 전략은 **RAG 중심 아키텍처**로 통일한다.
 - 외부 API 키 없이도 RAG 구조를 검증할 수 있다.
 - 품질 고도화보다 "근거 있는 답변"과 "업무 전환"을 우선한다.
 - 모델 또는 검색 실패는 구조화된 오류 상태로 다음 폴백 단계에 전달한다.
-- AI 서버는 ChromaDB를 로컬 Vector Store로 고정 사용한다. BE 측 Elasticsearch(ADR 009)와는 별개다.
+- AI 서버는 Qdrant를 로컬 Vector Store로 고정 사용한다. BE 측 Elasticsearch(ADR 009)와는 별개다.
+- Qdrant 장애 또는 데이터 유실 시 MariaDB 정본과 동기화 작업에서 전체 재색인할 수 있어야 한다.
 - 지식과 정책을 RAG, 시스템 프롬프트, 코드 규칙으로 분리하여 변경 사항을 즉시 반영할 수 있다.
 - LLM provider를 교체해도 검색, 출처 검증, 실패 전환 계약은 유지한다.
 
@@ -121,3 +133,5 @@ final_prompt = base_prompt + "\n\n" + custom_prompt
 - seed 문서 범위와 개수 결정 필요.
 - 고객사별 로컬/클라우드 provider의 품질 평가 기준을 확정해야 한다.
 - Cross-Encoder 점수 정규화와 `NO_RESULT` 임계값을 평가셋으로 확정해야 한다.
+- `doc_id` payload index와 Qdrant scroll pagination을 운영 범위에 포함할지 확정해야 한다.
+- provider별 vector size와 모델 변경 시 collection 재색인 절차를 구현해야 한다.

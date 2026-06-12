@@ -5,13 +5,16 @@ from app.common.exceptions import ProviderError, provider_call
 from .base import BaseEmbeddingClient
 from .ollama_embedding import OllamaEmbeddingClient
 from .openai_embedding import OpenAIEmbeddingClient
+from .google_embedding import GoogleEmbeddingClient
 
 
 def get_embedding_client() -> BaseEmbeddingClient:
+    if settings.embedding_provider == EmbeddingProvider.LOCAL:
+        return OllamaEmbeddingClient()
     if settings.embedding_provider == EmbeddingProvider.OPENAI:
         return OpenAIEmbeddingClient()
-    if settings.embedding_provider == EmbeddingProvider.OLLAMA:
-        return OllamaEmbeddingClient()
+    if settings.embedding_provider == EmbeddingProvider.GOOGLE:
+        return GoogleEmbeddingClient()
     raise ProviderError("embedding", f"지원하지 않는 provider: {settings.embedding_provider}")
 
 

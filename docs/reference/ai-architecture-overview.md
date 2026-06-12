@@ -89,18 +89,20 @@ API Layer
    └─ EmbeddingProvider
 ```
 
-`SensitiveDataMasker`는 도메인에 종속되지 않는 `app/common/masking.py`에 두고 인덱싱과 질의 경로가 공유한다. 마스킹 실패는 공통 `MaskingBlockedError`로 변환하며, 오케스트레이터는 이를 `BLOCKED` 상태로 처리한다.
-
-## Provider 추상화
+## Provider 구현
 
 ```text
 LlmProvider
-├─ LocalLlmProvider
-└─ CloudLlmProvider
+├─ Local (Ollama)
+├─ OpenAI
+├─ Google
+├─ Anthropic
+└─ Fallback (OpenAI → Google → Anthropic)
 
 EmbeddingProvider
-├─ LocalEmbeddingProvider
-└─ CloudEmbeddingProvider
+├─ Ollama
+├─ OpenAI
+└─ Google
 ```
 
 모든 구현체는 동일한 요청/응답 계약, timeout, 오류 타입을 제공해야 한다.
@@ -110,6 +112,9 @@ EmbeddingProvider
 ### AI
 
 - 문서 chunking, embedding, retrieval
+- `POST /api/v1/documents/ingest` 인덱싱과 `DELETE /api/v1/documents/{source_id}?source_type=...` 삭제
+- source type별 마스킹·청킹 설정 적용
+- source type별 Qdrant collection과 deterministic UUID point ID 관리
 - 수기 지식 chunking과 Vector Store 동기화
 - 매뉴얼, 워키, 수기 지식, 승인된 지식화 문서, 승인된 라우팅 사례의 chunking
 - 출처 기반 답변 생성

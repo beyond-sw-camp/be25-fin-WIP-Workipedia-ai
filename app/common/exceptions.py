@@ -11,6 +11,14 @@ class WorkipediaException(Exception):
         self.message = message
 
 
+class MaskingBlockedError(Exception):
+    """민감정보 마스킹이 차단된 경우. 텍스트 처리를 중단해야 한다."""
+
+    def __init__(self, reason: str = "") -> None:
+        self.reason = reason
+        super().__init__(f"마스킹 차단: {reason}" if reason else "마스킹 차단")
+
+
 class ProviderError(Exception):
     """LLM·Embedding provider 호출 실패. orchestrator에서 ERROR 단계로 처리한다."""
 
@@ -18,10 +26,6 @@ class ProviderError(Exception):
         self.provider = provider
         self.message = message
         super().__init__(f"[{provider}] {message}")
-
-
-class MaskingBlockedError(Exception):
-    """민감정보 마스킹 실패. orchestrator에서 BLOCKED 상태로 처리한다."""
 
 
 @contextmanager

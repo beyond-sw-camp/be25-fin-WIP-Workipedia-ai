@@ -1,4 +1,4 @@
-from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseChatModel
 
 from app.core.config import CHAT_MODEL_MAP, settings
@@ -8,11 +8,11 @@ _TIMEOUT = 60
 _MAX_RETRIES = 2
 
 
-class OpenAIClient(BaseLLMClient):
+class AnthropicClient(BaseLLMClient):
     def get_model(self) -> BaseChatModel:
-        return ChatOpenAI(
-            api_key=settings.openai_api_key,
-            model=CHAT_MODEL_MAP["openai"],
+        return ChatAnthropic(
+            api_key=settings.anthropic_api_key,
+            model=CHAT_MODEL_MAP["anthropic"],
             timeout=_TIMEOUT,
             max_retries=_MAX_RETRIES,
         )
