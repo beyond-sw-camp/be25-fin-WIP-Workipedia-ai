@@ -4,8 +4,8 @@
 > 상태: Draft
 > 정본 위치: `docs/reference/trd.md`
 > 관련 문서: `docs/reference/service-flow.md`, `docs/reference/prd.md`, `docs/reference/ai-architecture-overview.md`
-> 버전: v0.4
-> 최종 수정: 2026-06-08
+> 버전: v0.5
+> 최종 수정: 2026-06-12
 
 ---
 
@@ -51,8 +51,8 @@
 | AI Vector Store | Qdrant persistent (RAG·라우팅 후보 검색) |
 | 인증 | JWT (Access + Refresh), 비밀번호 BCrypt |
 | 세션/임시 메시지 저장 | Redis (Refresh Token, Flash Chat TTL 메시지 저장) — ADR 003 참조 |
-| LLM | 고객사 설정에 따라 로컬 또는 클라우드 provider 선택 |
-| Embedding | 고객사 설정에 따라 로컬 또는 클라우드 provider 선택 |
+| LLM | Local(Ollama), OpenAI, Google, Anthropic, 외부 provider fallback |
+| Embedding | Ollama, OpenAI, Google |
 | 메시지 브로커 | BE RabbitMQ (알림·포인트·ESG 비동기 이벤트) |
 | 실시간 통신 | Spring WebSocket + STOMP (Flash Chat), SSE/폴링 fallback (알림) |
 | 배치 | BE Spring Scheduler (`@Scheduled`) |
@@ -63,9 +63,12 @@
 
 1. **인덱싱(BE `ai_sync_jobs` + 일일 정합성 점검)** — KNOIT_006
    - BE `@Scheduled` 워커가 매뉴얼·워키·수기 지식·승인 지식·라우팅 사례의 변경 작업을 AI API로 전달
-   - AI 서버가 매뉴얼, 워키, 수기 지식, 승인된 지식화 문서, 승인된 라우팅 사례를 문서 유형별로 분할
-   - 생성된 chunk → `worki_chunks`, `manual_chunks` 등 chunk 테이블에 저장
+   - AI API: `POST /api/v1/documents/ingest`, `DELETE /api/v1/documents/{source_id}?source_type=...`
+   - AI 서버가 source type별 마스킹과 청킹 설정을 적용
+   - Qdrant collection: `manual_chunks`, `worki_chunks`, `knowledge_data_chunks`, `manual_knowledge_chunks`이며, 같은 이름의 BE RDB chunk 테이블과 저장 책임은 별개
+   - 논리 chunk ID `{source_type}:{source_id}:{chunk_index}`를 deterministic UUID point ID로 변환
    - 선택된 Embedding provider로 임베딩 생성 → Qdrant에 upsert
+   - 재인덱싱은 임베딩 성공 후 기존 `doc_id` point를 삭제하여 임베딩 실패 시 기존 검색 데이터를 유지
    - 일일 배치는 누락·실패 데이터 재처리와 RDB/Qdrant 정합성 점검에 사용
 
 AI 서버는 RabbitMQ를 직접 구독하지 않는다. BE가 `ai_sync_jobs`를 기준으로 AI HTTP API를 호출한다.
@@ -384,7 +387,7 @@ WebSocket/STOMP:
 | 비밀번호 | 8자 이상 영문+숫자 / BCrypt 저장 |
 | 인증 | JWT(짧은 Access + Refresh), HttpOnly 쿠키 또는 헤더 |
 | 권한 검사 | 모든 변경 API에서 USER/TEAM_ADMIN/SYSTEM_ADMIN/부서원 권한 명시 검증 |
-| 개인정보 마스킹 | KNOIT_007 — AI가 모델 호출과 Vector Store 저장 전에 주민번호/연락처/계좌 등 민감정보 마스킹 |
+| 개인정보 마스킹 | KNOIT_007 — 주민번호·카드번호는 항상 마스킹하고 WORKI는 전화번호·이메일을 추가 마스킹. 계좌번호는 정책 확정 후 추가 |
 | 개인정보 답변 거부 | KNOIT_008 — LLM 응답 후처리에 개인정보 유출 검사 |
 | Flash Chat 임시성 | 메시지는 Redis TTL로 삭제하며 영구 DB에 저장하지 않음 |
 | 파일 첨부 | 이미지 MIME/크기 제한, 저장 경로 직접 노출 금지, 고객사별 S3/MinIO adapter 선택 |
@@ -413,8 +416,8 @@ WebSocket/STOMP:
 
 | 의존성 | 사용 목적 | 위험 / 대응 |
 |---|---|---|
-| LLM Provider | RAG 답변 생성 | 고객사별 local/cloud 구현체 교체, 장애 시 다음 폴백 경로로 이동 |
-| Embedding Provider | 문서·질문 임베딩 | 고객사별 local/cloud 구현체 교체, 동일 벡터 계약 유지 |
+| LLM Provider | RAG 답변 생성 | Local/Ollama, OpenAI, Google, Anthropic, fallback. 민감정보 마스킹 후 호출 |
+| Embedding Provider | 문서·질문 임베딩 | Ollama, OpenAI, Google. provider별 출력 차원 관리 필요 |
 | Cross-Encoder Reranker | 검색 후보 재정렬 | 후보별 `candidate_id`, 원본 `score`, `rank` 반환 |
 | Object Storage | 이미지 첨부 저장 | 고객사별 S3/MinIO 구현체 교체 |
 
@@ -435,6 +438,13 @@ WebSocket/STOMP:
 - RDB 일 1회 풀백업 + 시간 단위 증분
 - Vector Store: 재구축 가능 구조이므로 백업 우선순위는 낮음 (단, 임베딩 비용 절감 위해 주기적 스냅샷 권장)
 
+### 8.4 현재 인덱싱 구현 상태
+
+- 문서 인덱싱·삭제 API, Qdrant adapter, source type별 collection과 청킹 설정이 구현되어 있다.
+- 유효한 `EMBEDDING_PROVIDER=ollama` 환경에서 문서 서비스 테스트 12개가 통과한다.
+- 기존 `.env`의 `EMBEDDING_PROVIDER=local`은 최신 enum과 맞지 않아 `ollama`로 변경해야 한다.
+- 실제 Qdrant 통합 테스트, `doc_id` payload index, scroll pagination, provider별 vector size 선택은 후속 작업이다.
+
 ---
 
 ## 9. 마이그레이션 / 데이터 초기화
@@ -448,10 +458,11 @@ WebSocket/STOMP:
 
 ## 10. 미해결 기술 이슈
 
-1. 매뉴얼 PDF 등 비정형 문서의 문서 유형별 chunk 크기와 overlap
+1. 실제 Qdrant 통합 테스트와 `doc_id` payload index
 2. Cross-Encoder 점수 정규화와 RAG `NO_RESULT` 임계값
 3. 티켓 라우팅의 1위 최소 점수와 1·2위 최소 점수 차이
 4. 워키 답변 우선순위 (정책 미확정 — PRD §7 참조)
 5. 챗봇 응답 캐싱 정책 (질문 유사도 기반 캐시 hit 조건)
-6. 고객사별 이미지 저장소 설정과 S3/MinIO 운영 정책
-7. Flash Chat 메시지 최대 보존 개수
+6. provider별 embedding vector size와 모델 변경 시 collection 재색인
+7. 고객사별 이미지 저장소 설정과 S3/MinIO 운영 정책
+8. Flash Chat 메시지 최대 보존 개수

@@ -27,9 +27,9 @@ AI 지식 전략은 **RAG 중심 아키텍처**로 통일한다.
 - AI Vector Store는 로컬 Docker 단일 노드 Qdrant를 사용한다.
 - MariaDB를 업무 데이터의 정본으로 유지하고 Qdrant는 재색인 가능한 검색 저장소로 취급한다.
 - 매뉴얼·워키·승인 지식·수기 지식·티켓 라우팅 사례는 데이터 유형과 수명주기에 따라 collection을 분리한다.
-- 각 point에는 `source_type`, `source_id`, `status`, `active` 등 검색과 삭제에 필요한 payload를 저장한다.
+- 각 point에는 `_chunk_id`, `text`, `doc_id`, `source_type`, `source_id`, `title`, `chunk_index` payload를 저장한다.
 - 검색 metric은 cosine similarity를 기본으로 사용한다.
-- collection 생성 시 현재 embedding provider의 vector size를 명시하며, vector size가 다른 모델로 변경하면 새 collection을 생성해 재색인한다.
+- 현재 collection vector size는 `bge-m3` 기준 1024로 고정한다. 다른 차원의 embedding provider를 운영에 적용하기 전 provider별 vector size와 재색인 절차를 구현한다.
 - point ID는 `{source_type}:{source_id}:{chunk_index}`를 기반으로 생성한 deterministic UUID를 사용한다.
 - Qdrant의 원본 score는 검색 후보 점수로 보존하고, Cross-Encoder reranking 점수와 혼합하지 않는다.
 
@@ -133,3 +133,5 @@ final_prompt = base_prompt + "\n\n" + custom_prompt
 - seed 문서 범위와 개수 결정 필요.
 - 고객사별 로컬/클라우드 provider의 품질 평가 기준을 확정해야 한다.
 - Cross-Encoder 점수 정규화와 `NO_RESULT` 임계값을 평가셋으로 확정해야 한다.
+- `doc_id` payload index와 Qdrant scroll pagination을 운영 범위에 포함할지 확정해야 한다.
+- provider별 vector size와 모델 변경 시 collection 재색인 절차를 구현해야 한다.

@@ -4,8 +4,8 @@
 > 상태: Accepted
 > 정본 위치: `docs/adr/local-llm-security-strategy.md`
 > 관련 문서: `docs/adr/deployment-and-data-security.md`, `docs/adr/rag-strategy.md`, `docs/domain-guides/chatbot-rag.md`
-> 버전: v0.2
-> 최종 수정: 2026-06-09
+> 버전: v0.3
+> 최종 수정: 2026-06-12
 
 ## Context
 
@@ -16,15 +16,16 @@ Workipedia는 사내 문서, 워키 지식, 요청 티켓을 활용해 답변을
 
 ## Decision
 
-고객사 설정에 따라 로컬 또는 클라우드 LLM/Embedding provider를 선택한다.
+고객사 설정에 따라 LLM과 Embedding provider를 선택한다.
 
 기본 원칙:
 
-- A사처럼 내부망 운영이 필요한 고객은 로컬 provider를 사용한다.
-- B사처럼 클라우드 사용이 가능한 고객은 외부 API provider를 사용할 수 있다.
+- LLM provider는 `local`, `openai`, `google`, `anthropic`, `fallback`을 지원한다.
+- Embedding provider는 `ollama`, `openai`, `google`을 지원한다.
+- `fallback` LLM은 OpenAI → Google → Anthropic 순서로 다음 provider를 시도한다.
 - 애플리케이션 코드는 `LlmProvider`, `EmbeddingProvider` 인터페이스에 의존한다.
 - 사용자의 질문, 티켓, 문서에서 민감정보를 탐지하면 저장 및 모델 호출 전에 마스킹한다.
-- 마스킹 전 원문은 기본적으로 DB에 보관하지 않는다.
+- 권한이 통제된 BE RDB에는 업무 원문을 저장할 수 있지만 AI 로그, Qdrant, 외부 provider에는 마스킹 전 원문을 남기지 않는다.
 - 챗봇 답변은 반드시 매뉴얼/워키 출처를 포함한다.
 - 근거가 부족하면 답변을 생성하지 않고 요청 티켓 전환을 안내한다.
 
@@ -39,5 +40,7 @@ Workipedia는 사내 문서, 워키 지식, 요청 티켓을 활용해 답변을
 
 - 고객사마다 별도 배포하고 환경변수 또는 배포 프로파일로 provider를 선택한다.
 - 하나의 서버에서 tenant별 provider를 런타임 전환하지 않는다.
-- 마스킹 전 원문은 DB와 로그에 보관하지 않는다.
-- 주민등록번호, 계좌번호, 연락처 등 민감정보 유형별 탐지·치환 규칙을 운영 설정으로 관리한다.
+- 마스킹 전 원문은 AI 로그와 Qdrant에 보관하지 않는다.
+- 주민등록번호와 카드번호는 항상 마스킹한다.
+- 현재 `WORKI` 인덱싱은 전화번호와 이메일도 추가 마스킹한다.
+- 계좌번호는 오탐 정책이 확정되지 않아 아직 구현하지 않는다.

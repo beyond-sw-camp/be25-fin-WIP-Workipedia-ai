@@ -1,7 +1,7 @@
 # Workipedia AI Architecture Overview
 
 > 상태: Draft  
-> 최종 수정: 2026-06-11
+> 최종 수정: 2026-06-12
 
 ## 핵심 원칙
 
@@ -89,16 +89,20 @@ API Layer
    └─ EmbeddingProvider
 ```
 
-## Provider 추상화
+## Provider 구현
 
 ```text
 LlmProvider
-├─ LocalLlmProvider
-└─ CloudLlmProvider
+├─ Local (Ollama)
+├─ OpenAI
+├─ Google
+├─ Anthropic
+└─ Fallback (OpenAI → Google → Anthropic)
 
 EmbeddingProvider
-├─ LocalEmbeddingProvider
-└─ CloudEmbeddingProvider
+├─ Ollama
+├─ OpenAI
+└─ Google
 ```
 
 모든 구현체는 동일한 요청/응답 계약, timeout, 오류 타입을 제공해야 한다.
@@ -108,6 +112,9 @@ EmbeddingProvider
 ### AI
 
 - 문서 chunking, embedding, retrieval
+- `POST /api/v1/documents/ingest` 인덱싱과 `DELETE /api/v1/documents/{source_id}?source_type=...` 삭제
+- source type별 마스킹·청킹 설정 적용
+- source type별 Qdrant collection과 deterministic UUID point ID 관리
 - 수기 지식 chunking과 Vector Store 동기화
 - 매뉴얼, 워키, 수기 지식, 승인된 지식화 문서, 승인된 라우팅 사례의 chunking
 - 출처 기반 답변 생성
