@@ -28,7 +28,13 @@ def ingest_document(
     - 422: 빈 텍스트 또는 지원하지 않는 source_type
     - 500: 임베딩 실패
     """
-    text = parse_upload_file(file)
+    try:
+        text = parse_upload_file(file)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"파일 파싱 실패: {e}")
+
     try:
         return document_service.index(
             DocumentIndexRequest(source_id=source_id, source_type=source_type, title=title, text=text)
