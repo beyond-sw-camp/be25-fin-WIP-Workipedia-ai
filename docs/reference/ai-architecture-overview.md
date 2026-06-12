@@ -50,9 +50,11 @@ return create_transition_action(request)
 ```text
 SUCCESS   : 유효한 근거 또는 Tool 결과로 답변 완료
 NO_RESULT : 근거 부족으로 다음 단계 진행
-ERROR     : timeout 등 실행 실패로 다음 단계 진행
+ERROR     : 예상 가능한 provider 실패는 다음 단계 진행
 BLOCKED   : 보안 또는 입력 검증 실패로 즉시 안전 응답
 ```
+
+단계 timeout은 worker thread를 실제 취소하지 못하므로 예외적으로 다음 단계로 진행하지 않고 `ERROR`를 즉시 반환한다. 예상하지 못한 구현 예외도 폴백으로 숨기지 않고 HTTP 500으로 전파한다.
 
 Reranker는 정렬 결과만 반환하지 않고 각 후보의 `candidate_id`, `text`, Cross-Encoder 원본 `score`, `rank`, `metadata`, Qdrant 원본 `retrieval_score`를 함께 반환한다. 라우팅 판단에서는 이를 바탕으로 `top_score`와 `score_margin`을 계산한다.
 
@@ -78,18 +80,27 @@ LLM 응답 문자열에서 특정 문구를 찾는 방식은 보조 수단으로
 API Layer
 └─ Orchestrator
    ├─ SensitiveDataMasker
+   ├─ ManualRagStep
+   ├─ WorkiRagStep
+   ├─ KnowledgeRagStep
+   ├─ ToolCallingStep
    ├─ RagService
    │  ├─ RagRetriever
-   │  ├─ CrossEncoderReranker
-   │  └─ RagChain
-   │     ├─ PromptBuilder
-   │     └─ LlmProvider
+   │  └─ CrossEncoderReranker
+   ├─ RagChain
+   │  ├─ PromptBuilder
+   │  └─ LlmProvider
+   ├─ ChatbotService
    ├─ ManualKnowledgeIndexer
    ├─ ToolSelector
    ├─ DepartmentRoutingService
    ├─ CrossEncoderReranker
    └─ EmbeddingProvider
 ```
+
+`POST /api/v1/chat`은 세션 저장 API가 아니라 질문 한 건을 처리하는 AI 내부 추론 endpoint다. BE가 세션·메시지를 저장하고 AI 응답의 `answer`, `sources`, `route`, `action`을 외부 챗봇 API 계약으로 변환한다.
+
+출처는 `candidate_id`, `source_type`, `source_id`, `title`, reranker `score`, 선택적 `link`를 포함한다. `source_type`과 `source_id`는 Qdrant metadata를 우선하고 `candidate_id` 파싱은 fallback으로만 사용한다.
 
 ## Provider 구현
 

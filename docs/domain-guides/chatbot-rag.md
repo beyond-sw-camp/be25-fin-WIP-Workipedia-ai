@@ -4,7 +4,7 @@
 > 상태: Draft
 > 정본 위치: `docs/domain-guides/chatbot-rag.md`
 > 관련 문서: `docs/adr/rag-strategy.md`, `docs/adr/local-llm-security-strategy.md`, `docs/reference/ai-architecture-overview.md`
-> 버전: v0.7
+> 버전: v0.8
 > 최종 수정: 2026-06-12
 
 ## 개발 목표
@@ -308,6 +308,91 @@ A. 매뉴얼 RAG
 - C단계에서 두 collection의 검색 후보만 합쳐 통합 reranking한다.
 - D단계 `NO_RESULT` 또는 재시도 불가능한 `ERROR`는 다음 검색 단계가 아니라 최종 전환 액션으로 처리한다.
 
+### 오케스트레이터 계약
+
+`RagOrchestrator`는 LangGraph 대신 `StepRunner` 목록을 명시적인 for-loop로 순회한다.
+
+| 단계 클래스 | 단계 | 처리 |
+|---|---|---|
+| `ManualRagStep` | A | `manual_chunks` 검색, reranking, 답변 생성 |
+| `WorkiRagStep` | B | `worki_chunks` 검색, reranking, 답변 생성 |
+| `KnowledgeRagStep` | C | 승인 지식과 수기 지식 후보를 합쳐 통합 reranking 후 답변 생성 |
+| `ToolCallingStep` | D | Tool Calling 구현 전까지 `NO_RESULT`를 반환하는 stub |
+
+각 단계는 다음 인터페이스를 제공한다.
+
+```python
+class StepRunner(Protocol):
+    step_name: str
+    timeout: float
+
+    def run(
+        self,
+        query: str,
+        custom_prompt: str | None,
+    ) -> RagResult: ...
+```
+
+오케스트레이터 결과:
+
+```python
+@dataclass
+class StepRecord:
+    step: str
+    status: RagStatus
+    error_message: str | None = None
+
+@dataclass
+class OrchestratorResult:
+    status: RagStatus
+    answer: GeneratedAnswer | None = None
+    route: str | None = None
+    step_history: list[StepRecord] = field(default_factory=list)
+    action: str | None = None
+```
+
+실행 규칙:
+
+- 질문을 먼저 `SensitiveDataMasker`로 마스킹하며 실패하면 `BLOCKED`로 즉시 종료한다.
+- `SUCCESS`는 성공 단계의 `route`와 답변을 즉시 반환한다.
+- `NO_RESULT`, 단계가 반환한 `ERROR`, 예상 가능한 `ProviderError`는 다음 단계로 이동한다.
+- 단계가 `BLOCKED`를 반환하면 다음 단계를 실행하지 않는다.
+- 모든 단계가 실패하면 `NO_RESULT`와 `action="CREATE_TICKET"`을 반환한다.
+- 예상하지 못한 구현 예외는 잡지 않고 전파해 HTTP 500으로 처리한다.
+- 단, `provider_call()` 블록 내부의 모든 예외는 현재 공통 정책에 따라 `ProviderError`로 변환된다.
+
+단계 timeout은 `A=10초`, `B=10초`, `C=12초`, `D=15초`를 기본값으로 사용한다. `asyncio.wait_for(asyncio.to_thread(...))`는 대기만 중단하고 thread를 종료하지 못하므로 timeout 발생 시 다음 단계를 실행하지 않고 `ERROR`를 즉시 반환한다. provider HTTP timeout을 단계 timeout 이하로 정렬하는 작업은 별도 후속 과제다.
+
+### 챗봇 AI API 계약
+
+AI 서버의 내부 추론 endpoint는 `POST /api/v1/chat`이다. 세션과 메시지 저장은 BE가 담당하고, AI endpoint는 질문 한 건에 대한 답변·출처·전환 액션을 반환한다.
+
+```python
+class ChatRequest(BaseModel):
+    question: str = Field(min_length=1)
+
+class SourceItem(BaseModel):
+    candidate_id: str
+    source_type: str
+    source_id: str
+    title: str
+    score: float
+    link: str | None = None
+
+class ChatResponse(BaseModel):
+    answer: str
+    sources: list[SourceItem]
+    route: str | None = None
+    action: str | None = None
+```
+
+- 일반 사용자 요청에는 `custom_prompt`를 노출하지 않는다. SYSTEM_ADMIN 설정을 전달하는 신뢰된 BE 내부 계약이 확정된 후 추가한다.
+- 실제 검색에 전달하지 않는 `top_k`도 요청에서 받지 않는다.
+- 출처의 `source_type`, `source_id`는 Qdrant metadata를 정본으로 사용하고 `candidate_id` 파싱은 fallback으로만 사용한다.
+- 출처 식별값이 없으면 빈 출처를 반환하지 않고 오류로 처리한다.
+- `BLOCKED`는 고정 안전 응답, `NO_RESULT + CREATE_TICKET`은 티켓 전환 안내를 반환한다.
+- `ERROR`는 근거 없음으로 위장하지 않고 일시적 오류와 재시도를 안내하는 별도 응답으로 변환한다.
+
 ## 완료 기준
 
 - 질문을 입력하면 챗봇 메시지가 저장된다.
@@ -327,6 +412,8 @@ A. 매뉴얼 RAG
 - `RagRetriever`, `RagService`, FastAPI lifespan preload 연결이 구현되어 있다.
 - `RagChain`, 구조화 답변 스키마, 기본/custom prompt, 인용 검증과 관련 단위 테스트가 구현되어 있다.
 - LLM 파싱 실패 1회 재시도와 provider 오류의 즉시 `ERROR` 변환이 구현되어 있다.
+- `RagOrchestrator`, `ChatbotService`, `/api/v1/chat` 연결과 endpoint 상태 변환은 설계가 확정되었으며 구현 예정이다.
+- D단계 Tool Calling은 별도 이슈에서 구현하며 현재 계획에서는 `NO_RESULT` stub으로 둔다.
 - 실제 Qdrant 통합 테스트, `doc_id` payload index, scroll pagination은 남아 있다.
 - 실제 Ollama 통합 테스트와 평가셋 기반 reranker 임계값 보정은 남아 있다.
 
@@ -336,3 +423,6 @@ A. 매뉴얼 RAG
 - Cross-Encoder 점수 정규화와 `NO_RESULT` 임계값
 - embedding 모델 변경 시 collection 재색인 절차
 - Qdrant payload index와 통합 테스트 범위
+- provider HTTP timeout과 단계 timeout의 정렬
+- SYSTEM_ADMIN custom prompt의 신뢰된 BE→AI 전달 계약
+- `BLOCKED`와 `ERROR` 사용자 안내 문구
