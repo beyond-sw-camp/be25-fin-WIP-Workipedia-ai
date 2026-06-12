@@ -291,8 +291,8 @@ A. 매뉴얼 RAG
 - provider enum은 `local`, `openai`, `google`이며 provider별 vector size가 구현되어 있다.
 - source type별 최신 청킹값은 `500/100`, `300/50`, `400/80`, `400/80`이다.
 - `RagCandidate`, `RerankedCandidate`, `CrossEncoderReranker`, 캐시 팩토리와 관련 단위 테스트가 구현되어 있다.
-- Qdrant 조회 시 collection 자동 생성을 제거하는 변경과 회귀 테스트가 진행 중이다.
-- `RagRetriever`, `RagService`, FastAPI lifespan preload 연결은 아직 구현 전이다.
+- Qdrant 조회 시 collection 자동 생성 제거와 회귀 테스트가 구현되어 있다.
+- `RagRetriever`, `RagService`, FastAPI lifespan preload 연결이 구현되어 있다.
 - 실제 Qdrant 통합 테스트, `doc_id` payload index, scroll pagination은 남아 있다.
 
 ## 논의 필요 사항

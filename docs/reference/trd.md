@@ -454,8 +454,8 @@ WebSocket/STOMP:
 - `RagCandidate`와 `RerankedCandidate` 데이터 계약이 구현되어 있다.
 - Cross-Encoder 모델은 `@lru_cache(maxsize=1)` 팩토리로 프로세스당 한 번 생성한다.
 - 모델 로드와 predict 실패를 `ProviderError("cross-encoder", ...)`로 변환한다.
-- `RagRetriever`, `RagService`, FastAPI lifespan preload 연결은 구현 진행 중이다.
-- 조회 시 collection 자동 생성을 제거하고 미존재 오류를 구조화하는 작업이 진행 중이다.
+- `RagRetriever`, `RagService`, FastAPI lifespan preload 연결이 구현되어 있다.
+- 조회 시 collection 자동 생성 제거와 미존재 오류 구조화가 구현되어 있다.
 
 ---
 
