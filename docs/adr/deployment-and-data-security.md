@@ -61,7 +61,10 @@ B사: LLM_PROVIDER=fallback, EMBEDDING_PROVIDER=openai, OBJECT_STORAGE=s3
 - 권한이 통제된 BE RDB에는 업무 원문을 저장할 수 있다.
 - 마스킹 전 원문은 AI 로그와 Vector Store에 저장하지 않는다.
 - 클라우드 provider에는 마스킹된 데이터만 전달한다.
-- 마스킹 처리 실패 시 Vector Store 저장 또는 모델 호출을 중단할 수 있어야 한다. BE RDB 원문 저장은 이 처리와 분리한다.
+- 마스킹 처리 실패 시 Vector Store 저장 또는 모델 호출을 중단하고 `BLOCKED`로 처리한다. BE RDB 원문 저장은 이 처리와 분리한다.
+- 탐지된 민감정보 값은 로그에 남기지 않는다. 적용 여부와 토큰 유형만 기록할 수 있다.
+
+구현 상세와 설정값은 `docs/domain-guides/chatbot-rag.md`의 `민감정보 마스킹` 절을 따른다.
 
 ## Image Storage
 
