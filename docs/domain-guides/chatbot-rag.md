@@ -4,7 +4,7 @@
 > 상태: Draft
 > 정본 위치: `docs/domain-guides/chatbot-rag.md`
 > 관련 문서: `docs/adr/rag-strategy.md`, `docs/adr/local-llm-security-strategy.md`, `docs/reference/ai-architecture-overview.md`
-> 버전: v0.6
+> 버전: v0.7
 > 최종 수정: 2026-06-12
 
 ## 개발 목표
@@ -218,47 +218,79 @@ Cross-Encoder는 import 시 즉시 생성하지 않는다. `@lru_cache(maxsize=1
 
 조회 시 없는 collection을 자동 생성하지 않는다. collection 생성은 인덱싱 `upsert()` 경로에서만 수행한다.
 
-## Negative Answer
+## 답변 생성과 Negative Answer
 
-RAG 단계는 다음 구조화 결과를 반환한다.
+`RagChain.generate()`는 질문과 reranking된 후보를 받아 구조화된 답변을 생성한다.
 
-```json
-{
-  "status": "SUCCESS",
-  "reason": null,
-  "answer": "답변 내용",
-  "references": [],
-  "reranking": {
-    "topScore": 4.82,
-    "results": [
-      {
-        "candidateId": "chunk-123",
-        "text": "청크 본문",
-        "score": 4.82,
-        "rank": 1,
-        "metadata": {
-          "source_type": "MANUAL",
-          "source_id": 123
-        },
-        "retrievalScore": 0.81
-      }
-    ]
-  }
-}
+```text
+query + RerankedCandidate 목록
+-> 최고 점수 임계값 검사
+-> system prompt + context 구성
+-> LLM 호출
+-> JSON 파싱과 스키마 검증
+-> 인용 ID 검증
+-> RagResult 반환
 ```
 
-- Reranker 결과에는 후보별 `candidateId`, `text`, `score`, `rank`, `metadata`, `retrievalScore`를 포함한다.
-- `topScore`는 1위 후보의 원본 점수다.
-- 점수 정규화 방식과 `NO_RESULT` 임계값은 평가셋으로 확정한다.
+내부 도메인 계약:
 
-`status`:
+```python
+class RagStatus(str, Enum):
+    SUCCESS = "SUCCESS"
+    NO_RESULT = "NO_RESULT"
+    ERROR = "ERROR"
+    BLOCKED = "BLOCKED"
 
-- `SUCCESS`: reranker 점수와 출처 검증을 통과한 답변
-- `NO_RESULT`: 검색 결과 없음, 점수 미달, 출처 검증 실패
-- `ERROR`: 모델 또는 Vector Store timeout 등 실행 실패
-- `BLOCKED`: 민감정보 마스킹 또는 보안 정책 실패
+@dataclass
+class GeneratedAnswer:
+    answer: str
+    references: list[RerankedCandidate]
 
-`NO_RESULT`와 재시도 불가능한 `ERROR`는 다음 폴백 단계로 이동한다. `BLOCKED`는 안전 응답 후 종료한다.
+@dataclass
+class RagResult:
+    status: RagStatus
+    answer: GeneratedAnswer | None = None
+    error_message: str | None = None
+```
+
+LLM은 다음 두 형식 중 하나인 JSON만 반환한다.
+
+```json
+{"status":"ANSWER","answer":"답변 텍스트","cited_ids":["MANUAL:1:0"]}
+```
+
+```json
+{"status":"INSUFFICIENT_CONTEXT","answer":null,"cited_ids":[]}
+```
+
+현재 `langchain_community.ChatOllama` 호환성을 위해 `with_structured_output()`을 사용하지 않는다. `invoke()` 응답의 `content`가 문자열 또는 content block 목록인 경우를 모두 처리하고, JSON code fence를 제거한 뒤 `json.loads()`와 Pydantic 모델로 검증한다.
+
+프롬프트 기본 규칙:
+
+- `[Context]`의 내용만 사용하고 외부 지식이나 추측을 사용하지 않는다.
+- 근거가 부족하면 `INSUFFICIENT_CONTEXT`를 반환한다.
+- 답변에 사용한 모든 chunk ID를 `cited_ids`에 포함한다.
+- 한국어로 간결하게 답한다.
+- SYSTEM_ADMIN의 `custom_prompt`는 기본 규칙 뒤에 추가하며, 충돌하면 기본 규칙을 우선한다.
+
+다음 조건 중 하나면 `NO_RESULT`다.
+
+1. 검색 후보가 없다.
+2. 1위 Cross-Encoder 원본 점수가 `RERANK_SCORE_THRESHOLD` 미만이다.
+3. LLM이 `INSUFFICIENT_CONTEXT`를 반환한다.
+4. `cited_ids`가 비어 있다.
+5. `cited_ids`에 검색 후보에 없는 ID가 포함되어 있다.
+
+유효한 인용 ID만 `references`로 변환하며, 중복 ID는 최초 등장 순서를 유지해 제거한다. 현재 `RERANK_SCORE_THRESHOLD=0.0`은 `bongsoo/kpf-cross-encoder-v1`의 raw logit 기준 임시값이며 평가셋 확보 후 조정한다.
+
+오류와 재시도 책임:
+
+- 네트워크/API 오류는 infra provider 계층의 재시도를 거친 `ProviderError`로 전달되므로 `RagChain`은 즉시 `ERROR`를 반환한다.
+- JSON 파싱 또는 응답 스키마 검증 실패는 `RagChain`에서 1회만 다시 호출하고, 다시 실패하면 `ERROR`를 반환한다.
+- `NO_RESULT`와 재시도 불가능한 `ERROR`는 다음 폴백 단계로 이동한다.
+- `BLOCKED`는 민감정보 마스킹 또는 보안 정책 실패이며 안전 응답 후 종료한다.
+
+`RagResult`는 AI 내부 계약이다. 외부 API의 `{status, answer, references}` 형태로 평탄화하고 reranking 진단 정보를 포함할지는 후속 오케스트레이터 또는 ChatbotService가 담당한다.
 
 ## 폴백 단계
 
@@ -293,7 +325,10 @@ A. 매뉴얼 RAG
 - `RagCandidate`, `RerankedCandidate`, `CrossEncoderReranker`, 캐시 팩토리와 관련 단위 테스트가 구현되어 있다.
 - Qdrant 조회 시 collection 자동 생성 제거와 회귀 테스트가 구현되어 있다.
 - `RagRetriever`, `RagService`, FastAPI lifespan preload 연결이 구현되어 있다.
+- `RagChain`, 구조화 답변 스키마, 기본/custom prompt, 인용 검증과 관련 단위 테스트가 구현되어 있다.
+- LLM 파싱 실패 1회 재시도와 provider 오류의 즉시 `ERROR` 변환이 구현되어 있다.
 - 실제 Qdrant 통합 테스트, `doc_id` payload index, scroll pagination은 남아 있다.
+- 실제 Ollama 통합 테스트와 평가셋 기반 reranker 임계값 보정은 남아 있다.
 
 ## 논의 필요 사항
 

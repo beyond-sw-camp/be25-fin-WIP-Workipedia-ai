@@ -80,7 +80,8 @@ AI 서버는 RabbitMQ를 직접 구독하지 않는다. BE가 `ai_sync_jobs`를 
    - 마스킹된 질문 임베딩 → Vector Store 유사도 검색(top-k)
    - 검색 후보를 로컬 Cross-Encoder로 재정렬하고 본문, metadata, Qdrant 원본 점수, Cross-Encoder 원본 점수와 rank를 유지
    - 검색된 chunk + 원본 매뉴얼/워키 메타 → LLM 프롬프트 컨텍스트 구성
-   - LLM 응답 생성 + 출처 메타 함께 반환(KNOIT_003)
+   - LLM은 `ANSWER` 또는 `INSUFFICIENT_CONTEXT`, 답변, 인용 chunk ID를 JSON으로 반환
+   - JSON 스키마와 인용 ID를 검증한 뒤 답변 + 출처 메타를 함께 반환(KNOIT_003)
    - 채팅 메시지 저장(KNOIT_004) → `chatbot_sessions`, `chatbot_messages`
 
 3. **실패 / 불만족 / 요청 전환 흐름** — KNOIT_005
@@ -456,6 +457,15 @@ WebSocket/STOMP:
 - 모델 로드와 predict 실패를 `ProviderError("cross-encoder", ...)`로 변환한다.
 - `RagRetriever`, `RagService`, FastAPI lifespan preload 연결이 구현되어 있다.
 - 조회 시 collection 자동 생성 제거와 미존재 오류 구조화가 구현되어 있다.
+
+### 8.6 현재 답변 생성 구현 상태
+
+- `RagChain`이 reranking 후보를 받아 구조화된 LLM 답변을 생성한다.
+- LLM 응답의 `ANSWER`/`INSUFFICIENT_CONTEXT` 상태와 `cited_ids`를 Pydantic 스키마로 검증한다.
+- 검색 후보 없음, 최고 점수 미달, 근거 부족, 빈 인용, 존재하지 않는 인용은 `NO_RESULT`로 처리한다.
+- 기본 프롬프트가 SYSTEM_ADMIN custom prompt보다 우선하며 context 외 지식 사용을 금지한다.
+- JSON 파싱·스키마 오류는 1회 재시도하고 provider 오류는 infra 재시도 후 즉시 `ERROR`로 변환한다.
+- 관련 단위 테스트는 구현되어 있으며 실제 Ollama 통합 테스트와 평가셋 기반 임계값 보정은 후속 작업이다.
 
 ---
 

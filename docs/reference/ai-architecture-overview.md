@@ -58,6 +58,8 @@ Reranker는 정렬 결과만 반환하지 않고 각 후보의 `candidate_id`, `
 
 LLM 응답 문자열에서 특정 문구를 찾는 방식은 보조 수단으로도 사용하지 않는다.
 
+`RagChain`은 LLM의 JSON 응답을 구조화 스키마로 검증하고, 응답의 인용 ID가 reranking 후보에 실제로 존재할 때만 `SUCCESS`와 references를 반환한다. 내부 `RagResult`를 외부 API 계약으로 변환하는 책임은 오케스트레이터 또는 ChatbotService에 둔다.
+
 ### RAG Negative Answer 판정
 
 다음 조건 중 하나면 `NO_RESULT`로 처리한다.
@@ -78,12 +80,14 @@ API Layer
    ├─ SensitiveDataMasker
    ├─ RagService
    │  ├─ RagRetriever
-   │  └─ CrossEncoderReranker
+   │  ├─ CrossEncoderReranker
+   │  └─ RagChain
+   │     ├─ PromptBuilder
+   │     └─ LlmProvider
    ├─ ManualKnowledgeIndexer
    ├─ ToolSelector
    ├─ DepartmentRoutingService
    ├─ CrossEncoderReranker
-   ├─ LlmProvider
    └─ EmbeddingProvider
 ```
 
