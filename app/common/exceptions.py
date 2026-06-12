@@ -34,7 +34,7 @@ def provider_call(provider: str) -> Generator[None, None, None]:
     try:
         yield
     except ProviderError:
-        raise
+        raise  # 이미 ProviderError면 이중 래핑 방지
     except Exception as exc:
         raise ProviderError(provider, str(exc)) from exc
 
