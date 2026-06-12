@@ -75,10 +75,10 @@ COLLECTION_MAP: dict[str, str] = {
 # source_type별 청킹 파라미터
 # ---------------------------------------------------------------------------
 CHUNK_CONFIG: dict[str, dict[str, int]] = {
-    "MANUAL": {"chunk_size": 800, "chunk_overlap": 200},
+    "MANUAL": {"chunk_size": 500, "chunk_overlap": 100},
     "WORKI": {"chunk_size": 300, "chunk_overlap": 50},
-    "KNOWLEDGE_DATA": {"chunk_size": 600, "chunk_overlap": 150},
-    "MANUAL_KNOWLEDGE": {"chunk_size": 800, "chunk_overlap": 200},
+    "KNOWLEDGE_DATA": {"chunk_size": 400, "chunk_overlap": 80},
+    "MANUAL_KNOWLEDGE": {"chunk_size": 400, "chunk_overlap": 80},
 }
 
 # ---------------------------------------------------------------------------
