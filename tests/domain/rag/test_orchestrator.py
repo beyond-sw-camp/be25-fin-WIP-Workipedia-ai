@@ -118,3 +118,179 @@ def test_knowledge_rag_step_uses_search_knowledge():
 
     MockService.return_value.search_knowledge.assert_called_once_with("지식 질문")
     assert result is expected
+
+
+# ── Task 4: RagOrchestrator ────────────────────────────────────────────────
+
+
+def _make_step(name: str, result: RagResult) -> MagicMock:
+    step = MagicMock()
+    step.step_name = name
+    step.timeout = 5.0
+    step.run.return_value = result
+    return step
+
+
+# ── 마스킹 ──────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_masking_blocked_returns_blocked():
+    from app.domain.rag.orchestrator import RagOrchestrator
+    from app.common.exceptions import MaskingBlockedError
+
+    with patch("app.domain.rag.orchestrator.masker") as mock_masker:
+        mock_masker.mask.side_effect = MaskingBlockedError("개인정보 감지")
+        orch = RagOrchestrator(steps=[])
+        result = await orch.run("주민번호 123-456")
+
+    assert result.status == RagStatus.BLOCKED
+    assert result.step_history == []
+
+
+# ── SUCCESS ──────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_success_on_first_step():
+    from app.domain.rag.orchestrator import RagOrchestrator
+
+    step_a = _make_step("A", RagResult(status=RagStatus.SUCCESS, answer=_make_answer()))
+    step_b = _make_step("B", RagResult(status=RagStatus.SUCCESS, answer=_make_answer()))
+
+    orch = RagOrchestrator(steps=[step_a, step_b])
+    result = await orch.run("질문")
+
+    assert result.status == RagStatus.SUCCESS
+    assert result.route == "A"
+    assert len(result.step_history) == 1
+    step_b.run.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fallback_to_second_step():
+    from app.domain.rag.orchestrator import RagOrchestrator
+
+    step_a = _make_step("A", RagResult(status=RagStatus.NO_RESULT))
+    step_b = _make_step("B", RagResult(status=RagStatus.SUCCESS, answer=_make_answer()))
+
+    orch = RagOrchestrator(steps=[step_a, step_b])
+    result = await orch.run("질문")
+
+    assert result.status == RagStatus.SUCCESS
+    assert result.route == "B"
+    assert len(result.step_history) == 2
+
+
+# ── BLOCKED ───────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_blocked_stops_chain():
+    from app.domain.rag.orchestrator import RagOrchestrator
+
+    step_a = _make_step("A", RagResult(status=RagStatus.BLOCKED))
+    step_b = _make_step("B", RagResult(status=RagStatus.SUCCESS, answer=_make_answer()))
+
+    orch = RagOrchestrator(steps=[step_a, step_b])
+    result = await orch.run("질문")
+
+    assert result.status == RagStatus.BLOCKED
+    assert len(result.step_history) == 1
+    step_b.run.assert_not_called()
+
+
+# ── ERROR ─────────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_provider_error_continues_to_next():
+    from app.domain.rag.orchestrator import RagOrchestrator
+    from app.common.exceptions import ProviderError
+
+    step_a = _make_step("A", RagResult(status=RagStatus.SUCCESS, answer=_make_answer()))
+    step_a.run.side_effect = ProviderError("llm", "timeout")
+    step_b = _make_step("B", RagResult(status=RagStatus.SUCCESS, answer=_make_answer()))
+
+    orch = RagOrchestrator(steps=[step_a, step_b])
+    result = await orch.run("질문")
+
+    assert result.status == RagStatus.SUCCESS
+    assert result.route == "B"
+    assert result.step_history[0].status == RagStatus.ERROR
+    assert result.step_history[0].error_message is not None
+
+
+@pytest.mark.asyncio
+async def test_all_steps_fail_returns_create_ticket():
+    from app.domain.rag.orchestrator import RagOrchestrator
+
+    steps = [
+        _make_step("A", RagResult(status=RagStatus.NO_RESULT)),
+        _make_step("B", RagResult(status=RagStatus.NO_RESULT)),
+        _make_step("C", RagResult(status=RagStatus.NO_RESULT)),
+        _make_step("D", RagResult(status=RagStatus.NO_RESULT)),
+    ]
+
+    orch = RagOrchestrator(steps=steps)
+    result = await orch.run("해결 안 되는 질문")
+
+    assert result.status == RagStatus.NO_RESULT
+    assert result.action == "CREATE_TICKET"
+    assert len(result.step_history) == 4
+
+
+# ── TIMEOUT ────────────────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_timeout_stops_chain_immediately():
+    from app.domain.rag.orchestrator import RagOrchestrator
+    import asyncio
+
+    async def slow_run():
+        await asyncio.sleep(10)
+        return RagResult(status=RagStatus.SUCCESS, answer=_make_answer())
+
+    step_a = MagicMock()
+    step_a.step_name = "A"
+    step_a.timeout = 0.01  # 10ms — 의도적 timeout
+    step_a.run = MagicMock(side_effect=lambda q, p: __import__('time').sleep(1) or RagResult(status=RagStatus.SUCCESS, answer=_make_answer()))
+
+    step_b = _make_step("B", RagResult(status=RagStatus.SUCCESS, answer=_make_answer()))
+
+    orch = RagOrchestrator(steps=[step_a, step_b])
+    result = await orch.run("질문")
+
+    assert result.status == RagStatus.ERROR
+    assert result.step_history[0].error_message == "timeout"
+    step_b.run.assert_not_called()
+
+
+# ── 예상치 못한 예외 전파 ───────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_unexpected_exception_propagates():
+    from app.domain.rag.orchestrator import RagOrchestrator
+
+    step_a = _make_step("A", RagResult(status=RagStatus.SUCCESS, answer=_make_answer()))
+    step_a.run.side_effect = RuntimeError("unexpected bug")
+
+    orch = RagOrchestrator(steps=[step_a])
+
+    with pytest.raises(RuntimeError, match="unexpected bug"):
+        await orch.run("질문")
+
+
+# ── 기본 단계 초기화 ────────────────────────────────────────────────────────────
+
+def test_default_steps_are_four():
+    from app.domain.rag.orchestrator import RagOrchestrator, ManualRagStep, WorkiRagStep, KnowledgeRagStep, ToolCallingStep
+
+    with (
+        patch("app.domain.rag.orchestrator.RagService"),
+        patch("app.domain.rag.orchestrator.RagChain"),
+        patch("app.domain.rag.reranker.cross_encoder_reranker.get_reranker"),
+    ):
+        orch = RagOrchestrator()
+
+    assert len(orch._steps) == 4
+    assert isinstance(orch._steps[0], ManualRagStep)
+    assert isinstance(orch._steps[1], WorkiRagStep)
+    assert isinstance(orch._steps[2], KnowledgeRagStep)
+    assert isinstance(orch._steps[3], ToolCallingStep)

@@ -94,7 +94,11 @@ MASKING_EMAIL_ENABLED = False
 RETRIEVAL_TOP_K = 20
 RERANK_TOP_K = 5
 RERANKER_MODEL = "bongsoo/kpf-cross-encoder-v1"
-RERANK_SCORE_THRESHOLD = 0.0  # 평가셋 확보 전 임시값. bongsoo/kpf-cross-encoder-v1 logit 기준, 0.0 미만이면 NO_RESULT
+# Cross-Encoder가 가장 관련 있다고 판단한 1위 문서의 최소 통과 점수.
+# 이 점수는 0~1 확률이 아니라 모델의 raw logit이므로 0.0이 관련도 0%라는 뜻은 아니다.
+# 1위 점수가 0.0 미만이면 근거가 부족하다고 보고 답변을 생성하지 않고 NO_RESULT를 반환한다.
+# 현재 0.0은 평가셋 확보 전 임시 기준이며, 실제 질문/문서 평가 결과에 따라 조정해야 한다.
+RERANK_SCORE_THRESHOLD = 0.0
 
 # ---------------------------------------------------------------------------
 # 폴백 단계별 timeout (초)
