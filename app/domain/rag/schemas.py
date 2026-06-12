@@ -38,3 +38,19 @@ class RagResult:
     status: RagStatus
     answer: GeneratedAnswer | None = None
     error_message: str | None = None
+
+
+@dataclass
+class StepRecord:
+    step: str
+    status: RagStatus
+    error_message: str | None = None
+
+
+@dataclass
+class OrchestratorResult:
+    status: RagStatus
+    answer: GeneratedAnswer | None = None
+    route: str | None = None
+    step_history: list[StepRecord] = field(default_factory=list)
+    action: str | None = None
