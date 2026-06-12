@@ -69,7 +69,7 @@ Reranker와 라우팅 서비스의 반환 계약:
 }
 ```
 
-- Reranker는 후보별 `candidateId`, 원본 `score`, `rank`를 반환한다.
+- Reranker는 후보별 `candidateId`, 후보 본문과 metadata, Cross-Encoder 원본 `score`, Qdrant 원본 `retrievalScore`, `rank`를 반환한다.
 - 라우팅 서비스는 1위 점수인 `topScore`와 1·2위 차이인 `scoreMargin`을 계산한다.
 - 점수 범위는 모델에 따라 다르므로 정규화 방식이 확정되기 전까지 `0~1`로 가정하지 않는다.
 

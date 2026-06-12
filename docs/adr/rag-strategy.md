@@ -4,7 +4,7 @@
 > 상태: Accepted
 > 정본 위치: `docs/adr/rag-strategy.md`
 > 관련 문서: `docs/reference/trd.md`, `docs/adr/deployment-and-data-security.md`, `docs/domain-guides/chatbot-rag.md`
-> 버전: v0.4
+> 버전: v0.5
 > 최종 수정: 2026-06-12
 
 ## Context
@@ -29,7 +29,8 @@ AI 지식 전략은 **RAG 중심 아키텍처**로 통일한다.
 - 매뉴얼·워키·승인 지식·수기 지식·티켓 라우팅 사례는 데이터 유형과 수명주기에 따라 collection을 분리한다.
 - 각 point에는 `_chunk_id`, `text`, `doc_id`, `source_type`, `source_id`, `title`, `chunk_index` payload를 저장한다.
 - 검색 metric은 cosine similarity를 기본으로 사용한다.
-- 현재 collection vector size는 `bge-m3` 기준 1024로 고정한다. 다른 차원의 embedding provider를 운영에 적용하기 전 provider별 vector size와 재색인 절차를 구현한다.
+- collection 생성 시 provider별 vector size를 사용한다. `local`은 1024, `openai`는 1536, `google`은 768이다.
+- embedding provider나 모델을 변경할 때 기존 collection 차원과 맞지 않으면 신규 collection을 생성하고 재색인한다.
 - point ID는 `{source_type}:{source_id}:{chunk_index}`를 기반으로 생성한 deterministic UUID를 사용한다.
 - Qdrant의 원본 score는 검색 후보 점수로 보존하고, Cross-Encoder reranking 점수와 혼합하지 않는다.
 
@@ -88,24 +89,39 @@ seed manual/worki data
 
 ## Reranker 반환 계약
 
-Cross-Encoder Reranker는 정렬된 후보와 각 후보의 점수를 함께 반환한다.
+Cross-Encoder Reranker는 정렬된 후보와 각 후보의 본문, 출처, 검색 점수를 함께 반환한다.
 
 ```json
 {
   "results": [
     {
       "candidateId": "chunk-123",
+      "text": "청크 본문",
       "score": 4.82,
-      "rank": 1
+      "rank": 1,
+      "metadata": {
+        "source_type": "MANUAL",
+        "source_id": 123
+      },
+      "retrievalScore": 0.81
     }
   ]
 }
 ```
 
-- `candidateId`, `score`, `rank`는 필수다.
+- `candidateId`, `text`, `score`, `rank`, `metadata`, `retrievalScore`를 반환한다.
 - `score`는 Cross-Encoder가 반환한 원본 점수다.
+- `retrievalScore`는 Qdrant가 반환한 원본 점수이며 reranker 점수와 혼합하지 않는다.
 - 모델별 점수 범위가 다를 수 있으므로 정규화 전에는 `0~1` 범위로 해석하지 않는다.
 - `NO_RESULT` 판단 임계값은 선택한 모델과 평가셋을 기준으로 별도 설정한다.
+
+### 모델 수명주기와 오류 처리
+
+- Cross-Encoder는 `@lru_cache(maxsize=1)` 팩토리로 프로세스당 한 번 생성한다.
+- FastAPI lifespan에서 팩토리를 호출해 요청 전에 preload한다.
+- 모델 로드와 `predict()` 실패는 `ProviderError("cross-encoder", ...)`로 변환한다.
+- 질의 임베딩과 Qdrant 호출 실패도 각각 공통 `ProviderError`로 변환한다.
+- 조회 경로는 존재하지 않는 collection을 자동 생성하지 않는다.
 
 ## Prompt Policy
 
@@ -134,4 +150,4 @@ final_prompt = base_prompt + "\n\n" + custom_prompt
 - 고객사별 로컬/클라우드 provider의 품질 평가 기준을 확정해야 한다.
 - Cross-Encoder 점수 정규화와 `NO_RESULT` 임계값을 평가셋으로 확정해야 한다.
 - `doc_id` payload index와 Qdrant scroll pagination을 운영 범위에 포함할지 확정해야 한다.
-- provider별 vector size와 모델 변경 시 collection 재색인 절차를 구현해야 한다.
+- provider 또는 모델 변경 시 collection 재색인 운영 절차를 확정해야 한다.

@@ -73,13 +73,16 @@ class QdrantStore:
         top_k: int = RETRIEVAL_TOP_K,
         collection_name: str = "workipedia",
     ) -> QueryResult:
-        self._ensure_collection(collection_name)
-        results = self.client.search(
+        # _ensure_collection을 호출하지 않는다. 존재하지 않는 collection을 빈 결과로 처리하면
+        # 오타나 잘못된 collection명이 NO_RESULT로 조용히 통과되어 디버깅이 어렵다.
+        # search()는 qdrant-client 1.7+ 에서 제거됨. query_points()로 대체
+        response = self.client.query_points(
             collection_name=collection_name,
-            query_vector=query_embedding,
+            query=query_embedding,
             limit=top_k,
             with_payload=True,
         )
+        results = response.points
         if not results:
             return QueryResult(ids=[], documents=[], metadatas=[], distances=[])
         ids, documents, metadatas, distances = [], [], [], []
