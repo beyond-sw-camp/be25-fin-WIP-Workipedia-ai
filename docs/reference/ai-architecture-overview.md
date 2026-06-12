@@ -54,7 +54,7 @@ ERROR     : timeout 등 실행 실패로 다음 단계 진행
 BLOCKED   : 보안 또는 입력 검증 실패로 즉시 안전 응답
 ```
 
-Reranker는 정렬 결과만 반환하지 않고 각 후보의 `candidate_id`, 원본 `score`, `rank`를 함께 반환한다. 라우팅 판단에서는 이를 바탕으로 `top_score`와 `score_margin`을 계산한다.
+Reranker는 정렬 결과만 반환하지 않고 각 후보의 `candidate_id`, `text`, Cross-Encoder 원본 `score`, `rank`, `metadata`, Qdrant 원본 `retrieval_score`를 함께 반환한다. 라우팅 판단에서는 이를 바탕으로 `top_score`와 `score_margin`을 계산한다.
 
 LLM 응답 문자열에서 특정 문구를 찾는 방식은 보조 수단으로도 사용하지 않는다.
 
@@ -76,11 +76,9 @@ LLM 응답 문자열에서 특정 문구를 찾는 방식은 보조 수단으로
 API Layer
 └─ Orchestrator
    ├─ SensitiveDataMasker
-   ├─ ManualRetriever
-   ├─ WorkiRetriever
-   ├─ KnowledgeRetriever
-   │  ├─ KnowledgeDataRetriever
-   │  └─ ManualKnowledgeRetriever
+   ├─ RagService
+   │  ├─ RagRetriever
+   │  └─ CrossEncoderReranker
    ├─ ManualKnowledgeIndexer
    ├─ ToolSelector
    ├─ DepartmentRoutingService
@@ -100,7 +98,7 @@ LlmProvider
 └─ Fallback (OpenAI → Google → Anthropic)
 
 EmbeddingProvider
-├─ Ollama
+├─ Local (Ollama)
 ├─ OpenAI
 └─ Google
 ```
@@ -115,6 +113,8 @@ EmbeddingProvider
 - `POST /api/v1/documents/ingest` 인덱싱과 `DELETE /api/v1/documents/{source_id}?source_type=...` 삭제
 - source type별 마스킹·청킹 설정 적용
 - source type별 Qdrant collection과 deterministic UUID point ID 관리
+- provider별 embedding vector size 관리
+- vector top-k 검색과 Cross-Encoder 통합 reranking
 - 수기 지식 chunking과 Vector Store 동기화
 - 매뉴얼, 워키, 수기 지식, 승인된 지식화 문서, 승인된 라우팅 사례의 chunking
 - 출처 기반 답변 생성

@@ -62,12 +62,14 @@
 ### 2.3 RAG 파이프라인
 
 1. **인덱싱(BE `ai_sync_jobs` + 일일 정합성 점검)** — KNOIT_006
-   - BE `@Scheduled` 워커가 매뉴얼·워키·수기 지식·승인 지식·라우팅 사례의 변경 작업을 AI API로 전달
+   - BE `@Scheduled` 워커가 object storage에서 매뉴얼·워키·수기 지식·승인 지식 파일을 내려받아 AI API로 전달
    - AI API: `POST /api/v1/documents/ingest`, `DELETE /api/v1/documents/{source_id}?source_type=...`
+   - 인덱싱 API는 `multipart/form-data`의 `source_id`, `source_type`, `title`, `file`을 수신하고 PDF, DOCX, TXT를 파싱
    - AI 서버가 source type별 마스킹과 청킹 설정을 적용
    - Qdrant collection: `manual_chunks`, `worki_chunks`, `knowledge_data_chunks`, `manual_knowledge_chunks`이며, 같은 이름의 BE RDB chunk 테이블과 저장 책임은 별개
    - 논리 chunk ID `{source_type}:{source_id}:{chunk_index}`를 deterministic UUID point ID로 변환
    - 선택된 Embedding provider로 임베딩 생성 → Qdrant에 upsert
+   - vector size는 `local=1024`, `openai=1536`, `google=768`
    - 재인덱싱은 임베딩 성공 후 기존 `doc_id` point를 삭제하여 임베딩 실패 시 기존 검색 데이터를 유지
    - 일일 배치는 누락·실패 데이터 재처리와 RDB/Qdrant 정합성 점검에 사용
 
@@ -76,6 +78,7 @@ AI 서버는 RabbitMQ를 직접 구독하지 않는다. BE가 `ai_sync_jobs`를 
 2. **질의 처리(실시간)** — KNOIT_001~003
    - 사용자 질문 → 민감정보 탐지 및 마스킹(KNOIT_007/008)
    - 마스킹된 질문 임베딩 → Vector Store 유사도 검색(top-k)
+   - 검색 후보를 로컬 Cross-Encoder로 재정렬하고 본문, metadata, Qdrant 원본 점수, Cross-Encoder 원본 점수와 rank를 유지
    - 검색된 chunk + 원본 매뉴얼/워키 메타 → LLM 프롬프트 컨텍스트 구성
    - LLM 응답 생성 + 출처 메타 함께 반환(KNOIT_003)
    - 채팅 메시지 저장(KNOIT_004) → `chatbot_sessions`, `chatbot_messages`
@@ -417,8 +420,8 @@ WebSocket/STOMP:
 | 의존성 | 사용 목적 | 위험 / 대응 |
 |---|---|---|
 | LLM Provider | RAG 답변 생성 | Local/Ollama, OpenAI, Google, Anthropic, fallback. 민감정보 마스킹 후 호출 |
-| Embedding Provider | 문서·질문 임베딩 | Ollama, OpenAI, Google. provider별 출력 차원 관리 필요 |
-| Cross-Encoder Reranker | 검색 후보 재정렬 | 후보별 `candidate_id`, 원본 `score`, `rank` 반환 |
+| Embedding Provider | 문서·질문 임베딩 | Local(Ollama), OpenAI, Google. provider별 출력 차원 적용 |
+| Cross-Encoder Reranker | 검색 후보 재정렬 | 후보별 `candidate_id`, `text`, `score`, `rank`, `metadata`, `retrieval_score` 반환 |
 | Object Storage | 이미지 첨부 저장 | 고객사별 S3/MinIO 구현체 교체 |
 
 ---
@@ -440,10 +443,19 @@ WebSocket/STOMP:
 
 ### 8.4 현재 인덱싱 구현 상태
 
-- 문서 인덱싱·삭제 API, Qdrant adapter, source type별 collection과 청킹 설정이 구현되어 있다.
-- 유효한 `EMBEDDING_PROVIDER=ollama` 환경에서 문서 서비스 테스트 12개가 통과한다.
-- 기존 `.env`의 `EMBEDDING_PROVIDER=local`은 최신 enum과 맞지 않아 `ollama`로 변경해야 한다.
-- 실제 Qdrant 통합 테스트, `doc_id` payload index, scroll pagination, provider별 vector size 선택은 후속 작업이다.
+- PDF, DOCX, TXT 파일 업로드 기반 문서 인덱싱·삭제 API가 구현되어 있다.
+- Qdrant adapter, source type별 collection과 최신 청킹 설정이 구현되어 있다.
+- embedding provider enum은 `local`, `openai`, `google`이며 provider별 vector size가 적용되어 있다.
+- 재인덱싱은 임베딩 성공 뒤 기존 point를 삭제해 실패 시 기존 검색 데이터를 유지한다.
+- 실제 Qdrant 통합 테스트, `doc_id` payload index, scroll pagination은 후속 작업이다.
+
+### 8.5 현재 retrieval/reranking 구현 상태
+
+- `RagCandidate`와 `RerankedCandidate` 데이터 계약이 구현되어 있다.
+- Cross-Encoder 모델은 `@lru_cache(maxsize=1)` 팩토리로 프로세스당 한 번 생성한다.
+- 모델 로드와 predict 실패를 `ProviderError("cross-encoder", ...)`로 변환한다.
+- `RagRetriever`, `RagService`, FastAPI lifespan preload 연결은 구현 진행 중이다.
+- 조회 시 collection 자동 생성을 제거하고 미존재 오류를 구조화하는 작업이 진행 중이다.
 
 ---
 
@@ -463,6 +475,6 @@ WebSocket/STOMP:
 3. 티켓 라우팅의 1위 최소 점수와 1·2위 최소 점수 차이
 4. 워키 답변 우선순위 (정책 미확정 — PRD §7 참조)
 5. 챗봇 응답 캐싱 정책 (질문 유사도 기반 캐시 hit 조건)
-6. provider별 embedding vector size와 모델 변경 시 collection 재색인
+6. embedding provider 또는 모델 변경 시 collection 재색인 운영 절차
 7. 고객사별 이미지 저장소 설정과 S3/MinIO 운영 정책
 8. Flash Chat 메시지 최대 보존 개수
