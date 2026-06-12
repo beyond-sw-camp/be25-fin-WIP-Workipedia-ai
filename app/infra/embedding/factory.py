@@ -9,7 +9,7 @@ from .google_embedding import GoogleEmbeddingClient
 
 
 def get_embedding_client() -> BaseEmbeddingClient:
-    if settings.embedding_provider == EmbeddingProvider.OLLAMA:
+    if settings.embedding_provider == EmbeddingProvider.LOCAL:
         return OllamaEmbeddingClient()
     if settings.embedding_provider == EmbeddingProvider.OPENAI:
         return OpenAIEmbeddingClient()

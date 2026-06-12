@@ -12,7 +12,7 @@ class LLMProvider(str, Enum):
 
 
 class EmbeddingProvider(str, Enum):
-    OLLAMA = "ollama"
+    LOCAL = "local"    # Ollama, 온프레미스
     OPENAI = "openai"
     GOOGLE = "google"
 
@@ -20,7 +20,7 @@ class EmbeddingProvider(str, Enum):
 class Settings(BaseSettings):
     # Provider 선택
     llm_provider: LLMProvider = LLMProvider.LOCAL
-    embedding_provider: EmbeddingProvider = EmbeddingProvider.OLLAMA
+    embedding_provider: EmbeddingProvider = EmbeddingProvider.LOCAL
 
     # 인프라 URL / Port
     ollama_base_url: str = "http://localhost:11434"
