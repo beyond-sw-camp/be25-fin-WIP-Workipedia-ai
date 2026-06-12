@@ -28,10 +28,6 @@ class ProviderError(Exception):
         super().__init__(f"[{provider}] {message}")
 
 
-class MaskingBlockedError(Exception):
-    """민감정보 마스킹 실패. orchestrator에서 BLOCKED 상태로 처리한다."""
-
-
 @contextmanager
 def provider_call(provider: str) -> Generator[None, None, None]:
     """provider 호출을 감싸서 모든 예외를 ProviderError로 변환한다."""
