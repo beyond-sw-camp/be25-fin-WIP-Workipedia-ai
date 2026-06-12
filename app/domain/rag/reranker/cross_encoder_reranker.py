@@ -1,11 +1,11 @@
 from sentence_transformers import CrossEncoder
 
-from app.core.config import settings
+from app.core.config import RERANKER_MODEL
 from .base import BaseReranker
 
 
 class CrossEncoderReranker(BaseReranker):
-    def __init__(self, model_name: str = settings.reranker_model) -> None:
+    def __init__(self, model_name: str = RERANKER_MODEL) -> None:
         self._model = CrossEncoder(model_name)
 
     def rerank(self, query: str, documents: list[str], top_k: int) -> list[int]:

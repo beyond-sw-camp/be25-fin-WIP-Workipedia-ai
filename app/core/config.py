@@ -4,39 +4,89 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class LLMProvider(str, Enum):
-    OLLAMA = "ollama"
-    OPENAI = "openai"
+    LOCAL = "local"            # Ollama, 온프레미스
+    OPENAI = "openai"          # OpenAI 단독
+    GOOGLE = "google"          # Google 단독
+    ANTHROPIC = "anthropic"    # Anthropic 단독
+    FALLBACK = "fallback"      # OpenAI → Google → Anthropic 순서로 자동 폴백
 
 
 class EmbeddingProvider(str, Enum):
     OLLAMA = "ollama"
     OPENAI = "openai"
+    GOOGLE = "google"
 
 
 class Settings(BaseSettings):
-    # LLM
-    llm_provider: LLMProvider = LLMProvider.OLLAMA
-    ollama_base_url: str = "http://localhost:11434"
-    chat_model: str = "llama3.1:8b"
-    openai_api_key: str = ""
-    openai_chat_model: str = "gpt-4o-mini"
-
-    # Embedding
+    # Provider 선택
+    llm_provider: LLMProvider = LLMProvider.LOCAL
     embedding_provider: EmbeddingProvider = EmbeddingProvider.OLLAMA
-    embedding_model: str = "bge-m3"
-    openai_embedding_model: str = "text-embedding-3-small"
 
-    # Vector Store
-    chroma_host: str = "localhost"
-    chroma_port: int = 8001
-    chroma_collection_name: str = "workipedia"
+    # 인프라 URL / Port
+    ollama_base_url: str = "http://localhost:11434"
+    qdrant_host: str = "localhost"
+    qdrant_port: int = 6333
 
-    # RAG
-    retrieval_top_k: int = 20
-    rerank_top_k: int = 5
-    reranker_model: str = "bongsoo/kpf-cross-encoder-v1"
+    # API Keys (secrets)
+    openai_api_key: str = ""
+    google_api_key: str = ""
+    anthropic_api_key: str = ""
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 
 settings = Settings()
+
+# ---------------------------------------------------------------------------
+# LLM 모델명 매핑
+# ---------------------------------------------------------------------------
+CHAT_MODEL_MAP: dict[str, str] = {
+    "ollama": "llama3.1:8b",
+    "openai": "gpt-4o-mini",
+    "google": "gemini-1.5-flash",
+    "anthropic": "claude-haiku-4-5-20251001",
+}
+
+# ---------------------------------------------------------------------------
+# Embedding 모델명 매핑 / 벡터 차원
+# ---------------------------------------------------------------------------
+EMBEDDING_MODEL_MAP: dict[str, str] = {
+    "ollama": "bge-m3",
+    "openai": "text-embedding-3-small",
+    "google": "text-embedding-004",
+}
+QDRANT_VECTOR_SIZE = 1024  # bge-m3 기준; openai text-embedding-3-small은 1536
+
+# ---------------------------------------------------------------------------
+# Vector Store collection 매핑
+# ---------------------------------------------------------------------------
+COLLECTION_MAP: dict[str, str] = {
+    "MANUAL": "manual_chunks",
+    "WORKI": "worki_chunks",
+    "KNOWLEDGE_DATA": "knowledge_data_chunks",
+    "MANUAL_KNOWLEDGE": "manual_knowledge_chunks",
+}
+
+# ---------------------------------------------------------------------------
+# source_type별 청킹 파라미터
+# ---------------------------------------------------------------------------
+CHUNK_CONFIG: dict[str, dict[str, int]] = {
+    "MANUAL": {"chunk_size": 800, "chunk_overlap": 200},
+    "WORKI": {"chunk_size": 300, "chunk_overlap": 50},
+    "KNOWLEDGE_DATA": {"chunk_size": 600, "chunk_overlap": 150},
+    "MANUAL_KNOWLEDGE": {"chunk_size": 800, "chunk_overlap": 200},
+}
+
+# ---------------------------------------------------------------------------
+# Masking 기본값
+# ---------------------------------------------------------------------------
+MASKING_ENABLED = True
+MASKING_PHONE_ENABLED = False
+MASKING_EMAIL_ENABLED = False
+
+# ---------------------------------------------------------------------------
+# RAG 파라미터
+# ---------------------------------------------------------------------------
+RETRIEVAL_TOP_K = 20
+RERANK_TOP_K = 5
+RERANKER_MODEL = "bongsoo/kpf-cross-encoder-v1"

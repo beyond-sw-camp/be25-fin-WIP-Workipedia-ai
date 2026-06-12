@@ -1,7 +1,7 @@
 from langchain_openai import ChatOpenAI
 from langchain_core.language_models import BaseChatModel
 
-from app.core.config import settings
+from app.core.config import CHAT_MODEL_MAP, settings
 from .base import BaseLLMClient
 
 _TIMEOUT = 60
@@ -12,7 +12,7 @@ class OpenAIClient(BaseLLMClient):
     def get_model(self) -> BaseChatModel:
         return ChatOpenAI(
             api_key=settings.openai_api_key,
-            model=settings.openai_chat_model,
+            model=CHAT_MODEL_MAP["openai"],
             timeout=_TIMEOUT,
             max_retries=_MAX_RETRIES,
         )
