@@ -29,7 +29,7 @@ jobs:
       - name: Check import
         run: python -c "from app.main import app"
         env:
-          LLM_PROVIDER: ollama
-          EMBEDDING_PROVIDER: ollama
-          CHROMA_HOST: localhost
-          CHROMA_PORT: 8001
+          LLM_PROVIDER: local
+          EMBEDDING_PROVIDER: local
+          QDRANT_HOST: localhost
+          QDRANT_PORT: 6333
