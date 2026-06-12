@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
 from app.domain.document.parser.factory import parse_upload_file
@@ -14,7 +16,7 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 @router.post("/ingest", response_model=DocumentIndexResponse)
 def ingest_document(
     source_id: int = Form(..., gt=0),
-    source_type: str = Form(..., min_length=1, examples=["MANUAL", "WORKI", "KNOWLEDGE_DATA", "MANUAL_KNOWLEDGE"]),
+    source_type: Literal["MANUAL", "WORKI", "KNOWLEDGE_DATA", "MANUAL_KNOWLEDGE"] = Form(...),
     title: str = Form(..., min_length=1),
     file: UploadFile = File(...),
 ) -> DocumentIndexResponse:
@@ -46,7 +48,7 @@ def ingest_document(
 @router.delete("/{source_id}", response_model=DocumentDeleteResponse)
 def delete_document(
     source_id: int,
-    source_type: str = Query(..., examples=["MANUAL", "WORKI", "KNOWLEDGE_DATA", "MANUAL_KNOWLEDGE"]),
+    source_type: Literal["MANUAL", "WORKI", "KNOWLEDGE_DATA", "MANUAL_KNOWLEDGE"] = Query(...),
 ) -> DocumentDeleteResponse:
     """
     source_id에 해당하는 Qdrant 청크를 전부 삭제한다.
