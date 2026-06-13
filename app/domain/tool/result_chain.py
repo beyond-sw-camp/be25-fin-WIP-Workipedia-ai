@@ -5,7 +5,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, model_validator
 
 from app.common.exceptions import MaskingBlockedError, ProviderError
-from app.common.masking import masker
+from app.common.masking import tool_masker as masker
 from app.domain.rag.schemas import GeneratedAnswer, RagResult, RagStatus
 from app.domain.tool.schemas import ToolExecutionResult
 from app.infra.llm.factory import get_llm

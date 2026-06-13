@@ -48,6 +48,9 @@ class SensitiveDataMasker:
 
 masker = SensitiveDataMasker()
 
+# Tool 결과는 외부 API/DB에서 오므로 전화번호·이메일을 포함한 전체 패턴을 적용한다.
+tool_masker = SensitiveDataMasker(patterns=list(_ALWAYS_ON_PATTERNS) + list(_OPTIONAL_PATTERNS))
+
 
 def masker_for(source_type: str) -> SensitiveDataMasker:
     """source_type에 맞는 마스커를 반환한다.

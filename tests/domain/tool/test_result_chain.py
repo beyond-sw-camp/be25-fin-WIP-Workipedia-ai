@@ -21,7 +21,7 @@ def _llm_response(payload: dict) -> MagicMock:
 
 
 def test_blocked_when_masking_raises(chain):
-    with patch("app.domain.tool.result_chain.masker") as mock_masker:
+    with patch("app.domain.tool.result_chain.masker") as mock_masker:  # alias → tool_masker
         mock_masker.mask.side_effect = MaskingBlockedError("차단")
         result = chain.generate("질문", make_exec_result(), custom_prompt=None)
     assert result.status == RagStatus.BLOCKED
@@ -92,3 +92,19 @@ def test_numeric_pii_is_masked_via_serialized_string(chain):
     result = _mask_tool_result({"cardNumber": 1234567890123456, "name": "홍길동"})
     assert "1234567890123456" not in result
     assert "[카드번호]" in result
+
+
+def test_phone_number_is_masked_in_tool_result(chain):
+    """Tool 결과의 전화번호가 마스킹되는지 확인 (기본 masker에서는 꺼져 있는 패턴)."""
+    from app.domain.tool.result_chain import _mask_tool_result
+    result = _mask_tool_result({"phone": "010-1234-5678", "name": "홍길동"})
+    assert "010-1234-5678" not in result
+    assert "[전화번호]" in result
+
+
+def test_email_is_masked_in_tool_result(chain):
+    """Tool 결과의 이메일이 마스킹되는지 확인 (기본 masker에서는 꺼져 있는 패턴)."""
+    from app.domain.tool.result_chain import _mask_tool_result
+    result = _mask_tool_result({"email": "user@example.com", "name": "홍길동"})
+    assert "user@example.com" not in result
+    assert "[이메일]" in result
