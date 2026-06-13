@@ -204,6 +204,8 @@ make run
 
 ## PR Rules
 
+PR 내용은 항상 코드 블록(` ```markdown `)으로 감싸서 출력한다.
+
 PR 내용 작성 시 `.github/PULL_REQUEST_TEMPLATE` 형식을 따른다.
 
 ```

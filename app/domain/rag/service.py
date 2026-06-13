@@ -1,7 +1,11 @@
+import logging
+
 from app.core.config import COLLECTION_MAP, RERANK_TOP_K
 from app.domain.rag.reranker.cross_encoder_reranker import get_reranker
 from app.domain.rag.retriever import rag_retriever
 from app.domain.rag.schemas import RerankedCandidate
+
+logger = logging.getLogger(__name__)
 
 
 class RagService:
@@ -13,11 +17,16 @@ class RagService:
     ) -> list[RerankedCandidate]:
         # 1단계: 벡터 유사도로 후보 넓게 검색
         candidates = rag_retriever.search(query, collection_name)
+        logger.warning("[%s] 검색 결과: %d개", collection_name, len(candidates))
         if not candidates:
             return []
 
         # 2단계: Cross-Encoder로 후보 재정렬 후 상위 rerank_top_k개 반환
-        return get_reranker().rerank(query, candidates, rerank_top_k)
+        reranked = get_reranker().rerank(query, candidates, rerank_top_k)
+        if reranked:
+            logger.warning("[%s] rerank 1위 점수: %.4f", collection_name, reranked[0].score)
+            logger.warning("[%s] top3 텍스트: %s", collection_name, [c.text[:80] for c in reranked[:3]])
+        return reranked
 
     def search_knowledge(
         self,

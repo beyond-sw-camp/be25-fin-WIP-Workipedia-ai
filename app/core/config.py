@@ -8,7 +8,7 @@ class LLMProvider(str, Enum):
     OPENAI = "openai"          # OpenAI 단독
     GOOGLE = "google"          # Google 단독
     ANTHROPIC = "anthropic"    # Anthropic 단독
-    FALLBACK = "fallback"      # OpenAI → Google → Anthropic 순서로 자동 폴백
+    FALLBACK = "fallback"      # OpenAI → Google → Anthropic 순서로 자동 폴백 - 로컬
 
 
 class EmbeddingProvider(str, Enum):
@@ -72,7 +72,7 @@ COLLECTION_MAP: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# source_type별 청킹 파라미터
+# source_type별 청킹 파라미터 
 # ---------------------------------------------------------------------------
 CHUNK_CONFIG: dict[str, dict[str, int]] = {
     "MANUAL": {"chunk_size": 500, "chunk_overlap": 100},
@@ -82,7 +82,7 @@ CHUNK_CONFIG: dict[str, dict[str, int]] = {
 }
 
 # ---------------------------------------------------------------------------
-# Masking 기본값
+# Masking 기본값 
 # ---------------------------------------------------------------------------
 MASKING_ENABLED = True
 MASKING_PHONE_ENABLED = False
@@ -91,7 +91,21 @@ MASKING_EMAIL_ENABLED = False
 # ---------------------------------------------------------------------------
 # RAG 파라미터
 # ---------------------------------------------------------------------------
-RETRIEVAL_TOP_K = 20
+RETRIEVAL_TOP_K = 50
 RERANK_TOP_K = 5
 RERANKER_MODEL = "bongsoo/kpf-cross-encoder-v1"
-RERANK_SCORE_THRESHOLD = 0.0  # 평가셋 확보 전 임시값. bongsoo/kpf-cross-encoder-v1 logit 기준, 0.0 미만이면 NO_RESULT
+# Cross-Encoder가 가장 관련 있다고 판단한 1위 문서의 최소 통과 점수.
+# 이 점수는 0~1 확률이 아니라 모델의 raw logit이므로 0.0이 관련도 0%라는 뜻은 아니다.
+# 1위 점수가 0.0 미만이면 근거가 부족하다고 보고 답변을 생성하지 않고 NO_RESULT를 반환한다.
+# 현재 0.0은 평가셋 확보 전 임시 기준이며, 실제 질문/문서 평가 결과에 따라 조정해야 한다.
+RERANK_SCORE_THRESHOLD = 0.0
+
+# ---------------------------------------------------------------------------
+# 폴백 단계별 timeout (초)
+# ---------------------------------------------------------------------------
+STEP_TIMEOUT: dict[str, float] = {
+    "A": 120.0,
+    "B": 120.0,
+    "C": 120.0,
+    "D": 15.0,
+}

@@ -4,7 +4,11 @@ from typing import Literal
 from pydantic import BaseModel, Field, ValidationError, model_validator
 from langchain_core.messages import HumanMessage, SystemMessage
 
+import logging
+
 from app.common.exceptions import ProviderError, provider_call
+
+logger = logging.getLogger(__name__)
 from app.core.config import RERANK_SCORE_THRESHOLD
 from app.domain.rag.prompt import build_context, build_system_prompt
 from app.domain.rag.schemas import GeneratedAnswer, RagResult, RagStatus, RerankedCandidate
@@ -82,6 +86,8 @@ class RagChain:
         if parsed is None:
             return RagResult(status=RagStatus.ERROR, error_message=last_error)
 
+        logger.warning("LLM 응답: status=%s, cited_ids=%s", parsed.status, parsed.cited_ids)
+
         # NO_RESULT 조건 3: LLM이 근거 없음 판단 (문자열 비교 아닌 구조화 필드)
         if parsed.status == "INSUFFICIENT_CONTEXT":
             return RagResult(status=RagStatus.NO_RESULT)
@@ -92,7 +98,9 @@ class RagChain:
 
         # NO_RESULT 조건 5: cited_ids에 없는 ID 포함 (환각 방지)
         candidate_map = {c.candidate_id: c for c in candidates}
+        logger.warning("candidate_map 키: %s", list(candidate_map.keys())[:5])
         if any(cid not in candidate_map for cid in parsed.cited_ids):
+            logger.warning("cited_id 불일치: %s not in candidates", [c for c in parsed.cited_ids if c not in candidate_map])
             return RagResult(status=RagStatus.NO_RESULT)
 
         # 중복 cited_ids 제거 (순서 유지)
