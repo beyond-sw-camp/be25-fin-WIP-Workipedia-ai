@@ -8,7 +8,7 @@ class LLMProvider(str, Enum):
     OPENAI = "openai"          # OpenAI 단독
     GOOGLE = "google"          # Google 단독
     ANTHROPIC = "anthropic"    # Anthropic 단독
-    FALLBACK = "fallback"      # OpenAI → Google → Anthropic 순서로 자동 폴백
+    FALLBACK = "fallback"      # OpenAI → Google → Anthropic 순서로 자동 폴백 - 로컬
 
 
 class EmbeddingProvider(str, Enum):
@@ -72,7 +72,7 @@ COLLECTION_MAP: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# source_type별 청킹 파라미터
+# source_type별 청킹 파라미터 
 # ---------------------------------------------------------------------------
 CHUNK_CONFIG: dict[str, dict[str, int]] = {
     "MANUAL": {"chunk_size": 500, "chunk_overlap": 100},
@@ -82,7 +82,7 @@ CHUNK_CONFIG: dict[str, dict[str, int]] = {
 }
 
 # ---------------------------------------------------------------------------
-# Masking 기본값
+# Masking 기본값 
 # ---------------------------------------------------------------------------
 MASKING_ENABLED = True
 MASKING_PHONE_ENABLED = False
@@ -91,7 +91,7 @@ MASKING_EMAIL_ENABLED = False
 # ---------------------------------------------------------------------------
 # RAG 파라미터
 # ---------------------------------------------------------------------------
-RETRIEVAL_TOP_K = 20
+RETRIEVAL_TOP_K = 50
 RERANK_TOP_K = 5
 RERANKER_MODEL = "bongsoo/kpf-cross-encoder-v1"
 # Cross-Encoder가 가장 관련 있다고 판단한 1위 문서의 최소 통과 점수.
@@ -104,8 +104,8 @@ RERANK_SCORE_THRESHOLD = 0.0
 # 폴백 단계별 timeout (초)
 # ---------------------------------------------------------------------------
 STEP_TIMEOUT: dict[str, float] = {
-    "A": 10.0,
-    "B": 10.0,
-    "C": 12.0,
+    "A": 120.0,
+    "B": 120.0,
+    "C": 120.0,
     "D": 15.0,
 }

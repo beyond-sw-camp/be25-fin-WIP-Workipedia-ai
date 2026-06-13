@@ -30,11 +30,19 @@ def get_llm() -> BaseChatModel:
         return AnthropicClient().get_model()
 
     if settings.llm_provider == LLMProvider.FALLBACK:
-        primary = OpenAIClient().get_model()
-        google = GoogleClient().get_model()
-        anthropic = AnthropicClient().get_model()
-        return primary.with_fallbacks(
-            [google, anthropic],
+        candidates = []
+        if settings.openai_api_key:
+            candidates.append(OpenAIClient().get_model())
+        if settings.google_api_key:
+            candidates.append(GoogleClient().get_model())
+        if settings.anthropic_api_key:
+            candidates.append(AnthropicClient().get_model())
+        if not candidates:
+            raise ProviderError("llm", "FALLBACK 모드에 사용 가능한 API 키가 없습니다.")
+        if len(candidates) == 1:
+            return candidates[0]
+        return candidates[0].with_fallbacks(
+            candidates[1:],
             exceptions_to_handle=_FALLBACK_EXCEPTIONS,
         )
 
