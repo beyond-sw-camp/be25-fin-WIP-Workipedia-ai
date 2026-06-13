@@ -7,15 +7,23 @@ from app.core.config import COLLECTION_MAP, STEP_TIMEOUT
 from app.domain.rag.chain import RagChain
 from app.domain.rag.schemas import OrchestratorResult, RagResult, RagStatus, StepRecord
 from app.domain.rag.service import RagService
+from app.domain.tool.result_chain import ToolResultChain
+from app.domain.tool.selector import ToolSelector
+from app.domain.tool.service import ToolService
+from app.domain.tool.validator import InputValidator
+from app.infra.tool.factory import get_tool_client
 
 
 class StepRunner(Protocol):
+    """폴백 체인의 각 단계가 구현해야 하는 인터페이스."""
     step_name: str
     timeout: float
 
     def run(self, query: str, custom_prompt: str | None) -> RagResult:
         ...
 
+
+# ── A단계: 매뉴얼 RAG ─────────────────────────────────────────────────────────
 
 class ManualRagStep:
     step_name = "A"
@@ -30,6 +38,8 @@ class ManualRagStep:
         return self._chain.generate(query, candidates, custom_prompt)
 
 
+# ── B단계: 워키 RAG ───────────────────────────────────────────────────────────
+
 class WorkiRagStep:
     step_name = "B"
     timeout = STEP_TIMEOUT["B"]
@@ -42,6 +52,8 @@ class WorkiRagStep:
         candidates = self._service.search_and_rerank(query, COLLECTION_MAP["WORKI"])
         return self._chain.generate(query, candidates, custom_prompt)
 
+
+# ── C단계: 지식 RAG ───────────────────────────────────────────────────────────
 
 class KnowledgeRagStep:
     step_name = "C"
@@ -56,14 +68,25 @@ class KnowledgeRagStep:
         return self._chain.generate(query, candidates, custom_prompt)
 
 
+# ── D단계: Tool Calling ───────────────────────────────────────────────────────
+
 class ToolCallingStep:
     step_name = "D"
     timeout = STEP_TIMEOUT["D"]
 
-    def run(self, query: str, custom_prompt: str | None) -> RagResult:
-        # 이슈 #11에서 실제 Tool Calling 로직으로 교체
-        return RagResult(status=RagStatus.NO_RESULT)
+    def __init__(self, service: ToolService | None = None) -> None:
+        self._service = service or ToolService(
+            client=get_tool_client(),
+            selector=ToolSelector(),
+            validator=InputValidator(),
+            result_chain=ToolResultChain(),
+        )
 
+    def run(self, query: str, custom_prompt: str | None) -> RagResult:
+        return self._service.run(query, custom_prompt)
+
+
+# ── 폴백 오케스트레이터 ────────────────────────────────────────────────────────
 
 class RagOrchestrator:
     def __init__(self, steps: list | None = None) -> None:
@@ -85,15 +108,16 @@ class RagOrchestrator:
                     timeout=step.timeout,
                 )
             except asyncio.TimeoutError:
-                # soft timeout: thread continues — stop chain to prevent accumulation
                 history.append(StepRecord(step=step.step_name, status=RagStatus.ERROR, error_message="timeout"))
                 return OrchestratorResult(status=RagStatus.ERROR, step_history=history)
             except ProviderError as exc:
                 history.append(StepRecord(step=step.step_name, status=RagStatus.ERROR, error_message=exc.message))
+                if step.step_name == "D":  # Tool 장애는 CREATE_TICKET이 아닌 ERROR
+                    return OrchestratorResult(status=RagStatus.ERROR, step_history=history)
                 continue
-            # Other exceptions propagate → FastAPI 500
 
             history.append(StepRecord(step=step.step_name, status=result.status, error_message=result.error_message))
+
             if result.status == RagStatus.SUCCESS:
                 return OrchestratorResult(
                     status=RagStatus.SUCCESS,
@@ -103,6 +127,9 @@ class RagOrchestrator:
                 )
             if result.status == RagStatus.BLOCKED:
                 return OrchestratorResult(status=RagStatus.BLOCKED, step_history=history)
+            if result.status == RagStatus.ERROR and step.step_name == "D":
+                return OrchestratorResult(status=RagStatus.ERROR, step_history=history)
+            # NO_RESULT (또는 A/B/C의 ERROR) → 다음 단계로 계속
 
         return OrchestratorResult(status=RagStatus.NO_RESULT, step_history=history, action="CREATE_TICKET")
 

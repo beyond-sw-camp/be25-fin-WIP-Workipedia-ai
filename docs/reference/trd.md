@@ -470,17 +470,17 @@ WebSocket/STOMP:
 - JSON 파싱·스키마 오류는 1회 재시도하고 provider 오류는 infra 재시도 후 즉시 `ERROR`로 변환한다.
 - 관련 단위 테스트는 구현되어 있으며 실제 Ollama 통합 테스트와 평가셋 기반 임계값 보정은 후속 작업이다.
 
-### 8.7 폴백 오케스트레이터와 챗봇 endpoint 계획
+### 8.7 폴백 오케스트레이터와 챗봇 endpoint
 
 - `ManualRagStep`, `WorkiRagStep`, `KnowledgeRagStep`, `ToolCallingStep`을 공통 `StepRunner` 계약으로 구현한다.
 - `RagOrchestrator`가 질문 마스킹 후 A→B→C→D 단계를 순회하고 각 결과를 `StepRecord`에 남긴다.
-- D단계는 Tool Calling 이슈 완료 전까지 `NO_RESULT` stub으로 둔다.
+- D단계는 현재 `NO_RESULT` stub이며, 확정된 구조와 구현·테스트 계획은 `docs/domain-guides/tool-integration.md`를 정본으로 사용한다.
 - `ChatbotService`가 오케스트레이터를 호출하고 AI `POST /api/v1/chat` endpoint가 결과를 응답 스키마로 변환한다.
 - 요청은 `question`만 받는다. 일반 사용자에게 `custom_prompt`와 미사용 `top_k`를 노출하지 않는다.
 - 성공 응답 출처는 `candidate_id`, `source_type`, `source_id`, `title`, `score`, 선택적 `link`를 포함한다.
 - `BLOCKED`, `NO_RESULT + CREATE_TICKET`, `ERROR`는 각각 안전 응답, 티켓 전환 안내, 일시적 오류 안내로 구분한다.
 - endpoint 테스트는 `SUCCESS`, `BLOCKED`, `CREATE_TICKET`, `ERROR`, 빈 질문 `422`를 포함한다.
-- 이 절의 오케스트레이터·endpoint 연결은 설계 확정 상태이며 아직 구현 전이다.
+- 오케스트레이터와 endpoint는 구현되어 있다. D단계 Tool Calling 실제 연동은 이슈 #11 범위로 남아 있다.
 
 ---
 
