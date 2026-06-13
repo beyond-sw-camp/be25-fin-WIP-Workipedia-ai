@@ -93,9 +93,20 @@ def test_execute_sends_correct_request_and_returns_result():
     assert result.data == {"name": "홍길동", "dept": "개발팀"}
 
 
-def test_execute_returns_none_data_when_data_key_missing():
+def test_execute_raises_provider_error_when_data_key_missing():
+    """BE 응답에 'data' 필드 자체가 없으면 ProviderError."""
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={})
+
+    client = _make_client(handler)
+    with pytest.raises(ProviderError):
+        client.execute("tool_001", {"employee_id": "E001"})
+
+
+def test_execute_returns_none_when_data_is_null():
+    """BE가 {"data": null}을 반환하면 data=None (빈 결과)."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": None})
 
     client = _make_client(handler)
     result = client.execute("tool_001", {"employee_id": "E001"})

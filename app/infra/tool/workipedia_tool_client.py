@@ -44,7 +44,12 @@ class WorkipediaToolClient:
                     json={"inputs": inputs},
                 )
                 resp.raise_for_status()
-                data = resp.json().get("data")
+                body = resp.json()
+                if "data" not in body:
+                    raise KeyError(f"BE 응답에 'data' 필드 누락: {body}")
+                data = body["data"]
+                if data is not None and not isinstance(data, (dict, list)):
+                    raise TypeError(f"BE 응답 'data' 타입 오류: {type(data).__name__}")
                 return ToolExecutionResult(tool_id=tool_id, data=data)
         except (httpx.HTTPStatusError, httpx.RequestError, KeyError, ValueError, TypeError, AttributeError) as exc:
             raise ProviderError("tool", str(exc)) from exc
