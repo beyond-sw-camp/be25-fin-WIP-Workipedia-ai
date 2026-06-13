@@ -69,7 +69,9 @@ def test_knowledge_rag_step_name():
 
 def test_tool_calling_step_returns_no_result():
     from app.domain.rag.orchestrator import ToolCallingStep
-    step = ToolCallingStep()
+    mock_service = MagicMock()
+    mock_service.run.return_value = RagResult(status=RagStatus.NO_RESULT)
+    step = ToolCallingStep(service=mock_service)
     assert step.step_name == "D"
     result = step.run("질문", None)
     assert result.status == RagStatus.NO_RESULT
@@ -294,3 +296,76 @@ def test_default_steps_are_four():
     assert isinstance(orch._steps[1], WorkiRagStep)
     assert isinstance(orch._steps[2], KnowledgeRagStep)
     assert isinstance(orch._steps[3], ToolCallingStep)
+
+
+# ── D단계 ToolCallingStep 관련 테스트 ─────────────────────────────────────────
+
+async def test_d_stage_no_result_falls_through_to_create_ticket():
+    """D단계 NO_RESULT → CREATE_TICKET 액션 반환."""
+    from app.domain.rag.orchestrator import RagOrchestrator
+
+    no_result_step = MagicMock()
+    no_result_step.step_name = "D"
+    no_result_step.timeout = 10.0
+    no_result_step.run.return_value = RagResult(status=RagStatus.NO_RESULT)
+
+    orch = RagOrchestrator(steps=[no_result_step])
+    result = await orch.run("질문")
+
+    assert result.status == RagStatus.NO_RESULT
+    assert result.action == "CREATE_TICKET"
+
+
+async def test_d_stage_error_returns_error_immediately():
+    """D단계 RagResult(ERROR) → 오케스트레이터가 즉시 ERROR 반환 (CREATE_TICKET 아님)."""
+    from app.domain.rag.orchestrator import RagOrchestrator
+
+    error_step = MagicMock()
+    error_step.step_name = "D"
+    error_step.timeout = 10.0
+    error_step.run.return_value = RagResult(status=RagStatus.ERROR)
+
+    orch = RagOrchestrator(steps=[error_step])
+    result = await orch.run("질문")
+
+    assert result.status == RagStatus.ERROR
+    assert result.action is None
+
+
+async def test_d_stage_provider_error_returns_error_immediately():
+    """D단계 ProviderError → 오케스트레이터가 즉시 ERROR 반환 (CREATE_TICKET 아님)."""
+    from app.domain.rag.orchestrator import RagOrchestrator
+    from app.common.exceptions import ProviderError
+
+    error_step = MagicMock()
+    error_step.step_name = "D"
+    error_step.timeout = 10.0
+    error_step.run.side_effect = ProviderError("tool", "BE 연결 실패")
+
+    orch = RagOrchestrator(steps=[error_step])
+    result = await orch.run("질문")
+
+    assert result.status == RagStatus.ERROR
+
+
+async def test_abc_stage_error_continues_to_next_step():
+    """A/B/C 단계 ERROR는 다음 단계로 폴백한다 (기존 동작 보호)."""
+    from app.domain.rag.orchestrator import RagOrchestrator
+
+    error_step = MagicMock()
+    error_step.step_name = "A"
+    error_step.timeout = 10.0
+    error_step.run.return_value = RagResult(status=RagStatus.ERROR)
+
+    success_step = MagicMock()
+    success_step.step_name = "B"
+    success_step.timeout = 10.0
+    success_step.run.return_value = RagResult(
+        status=RagStatus.SUCCESS,
+        answer=GeneratedAnswer(answer="답변", references=[]),
+    )
+
+    orch = RagOrchestrator(steps=[error_step, success_step])
+    result = await orch.run("질문")
+
+    assert result.status == RagStatus.SUCCESS
