@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     llm_provider: LLMProvider = LLMProvider.LOCAL
     embedding_provider: EmbeddingProvider = EmbeddingProvider.LOCAL
 
+    # Tool Calling
+    tool_client: str = "stub"           # "stub" | "workipedia"
+    be_base_url: str = "http://localhost:8080"
+    tool_http_timeout: float = 25.0     # D단계 전체 timeout(120s)보다 짧게
+
     # 인프라 URL / Port
     ollama_base_url: str = "http://localhost:11434"
     qdrant_host: str = "localhost"

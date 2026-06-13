@@ -44,3 +44,11 @@ async def workipedia_exception_handler(request: Request, exc: WorkipediaExceptio
         status_code=exc.status_code,
         content={"success": False, "message": exc.message},
     )
+
+
+class ToolValidationError(Exception):
+    """Tool 입력 검증 실패. ToolService가 BLOCKED로 변환한다."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(f"Tool 입력 검증 실패: {reason}")
