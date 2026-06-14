@@ -4,8 +4,8 @@
 > 상태: Draft
 > 정본 위치: `docs/domain-guides/chatbot-rag.md`
 > 관련 문서: `docs/adr/rag-strategy.md`, `docs/adr/local-llm-security-strategy.md`, `docs/reference/ai-architecture-overview.md`
-> 버전: v0.8
-> 최종 수정: 2026-06-12
+> 버전: v0.9
+> 최종 수정: 2026-06-14
 
 ## 개발 목표
 
@@ -33,6 +33,8 @@
 - SYSTEM_ADMIN용 custom_prompt 내용·활성 상태 관리
 - 출처 최신성 표시
 - A 매뉴얼 → B 워키 → C 지식 RAG → D Tool Calling 폴백
+- 세션 대화 기록을 활용한 후속 질문 검색어 재작성
+- 검색용 `retrieval_query`와 답변 생성용 원본 `query` 분리
 
 ## API/DB 영향
 
@@ -84,13 +86,61 @@ DocumentService
 → 인덱싱 중단 및 오류 응답
 
 챗봇 경로
-RagOrchestrator
-→ SensitiveDataMasker.mask()
+ChatbotService
+→ 현재 질문과 선택된 세션 컨텍스트 마스킹
 → MaskingBlockedError
 → BLOCKED 안전 응답 후 종료
 ```
 
 호출 서비스 계층이 `MaskingBlockedError`를 처리하며, 마스킹 모듈은 예외를 공통 예외 타입으로 변환해 전달한다.
+
+## 세션 컨텍스트와 후속 질문 검색
+
+BE가 전달한 이전 대화는 답변 생성뿐 아니라 후속 질문의 검색 정확도를 높이는 데 사용한다. AI는 세션을 저장하지 않으며 요청마다 필요한 메시지만 전달받는다.
+
+처리 흐름:
+
+```text
+ChatRequest
+→ 최근 max_context_messages개 선택
+→ 현재 질문과 선택된 대화 내용 마스킹
+→ contextualize(masked_question, masked_context)
+→ retrieval_query 생성
+→ A/B/C 검색·reranking과 D Tool 선택에는 retrieval_query 사용
+→ 최종 답변 생성에는 masked_question과 masked_context 사용
+```
+
+- `query`는 사용자가 입력한 현재 질문을 마스킹한 값이며 최종 답변 생성에 사용한다.
+- `retrieval_query`는 대화 기록을 참고해 독립된 검색 문장으로 재작성한 값이다.
+- 세션 컨텍스트가 없거나 `MAX_CONTEXT_MESSAGES=0`이면 LLM을 호출하지 않고 `retrieval_query=query`로 처리한다.
+- 컨텍스트는 입력 순서를 유지한 채 마지막 `max_context_messages`개만 선택한다.
+- contextualize 응답은 code fence를 제거한 첫 줄만 사용한다. 빈 응답이거나 500자를 초과하면 원본 `query`로 fallback한다.
+- contextualize provider 오류나 timeout은 검색 전체를 실패시키지 않는다. 원본 `query`로 계속 진행하고 `step_history` 맨 앞에 `CONTEXT/ERROR`를 기록한다.
+- 예상하지 못한 구현 오류는 숨기지 않고 HTTP 500으로 전파한다.
+
+LLM 메시지 구성:
+
+```text
+SystemMessage(base_prompt + trusted custom_prompt)
+HumanMessage(previous USER content)
+AIMessage(previous ASSISTANT content)
+...
+HumanMessage([Context 또는 Tool Result] + current query)
+```
+
+이전 대화는 system prompt보다 우선하지 않는다. `SYSTEM` 역할은 BE 요청에서 허용하지 않고 AI가 직접 생성한다.
+
+관련 설정:
+
+```python
+max_context_messages = 10
+contextualize_llm_timeout = 25.0
+STEP_TIMEOUT["CONTEXT"] = 30.0
+```
+
+- `MAX_CONTEXT_MESSAGES`는 0 이상이며 0이면 history와 contextualize를 모두 비활성화한다.
+- `CONTEXTUALIZE_LLM_TIMEOUT`은 0초보다 크고 `STEP_TIMEOUT["CONTEXT"]`보다 작아야 한다.
+- provider HTTP timeout을 outer `asyncio.wait_for()`보다 짧게 설정해 timeout 후 worker thread에 호출이 남는 시간을 제한한다.
 
 ## Chunking 책임
 
@@ -329,7 +379,9 @@ class StepRunner(Protocol):
     def run(
         self,
         query: str,
+        retrieval_query: str,
         custom_prompt: str | None,
+        session_context: list[SessionMessage],
     ) -> RagResult: ...
 ```
 
@@ -353,7 +405,9 @@ class OrchestratorResult:
 
 실행 규칙:
 
-- 질문을 먼저 `SensitiveDataMasker`로 마스킹하며 실패하면 `BLOCKED`로 즉시 종료한다.
+- `ChatbotService`가 질문과 세션 컨텍스트를 먼저 마스킹하며 실패하면 `BLOCKED`로 즉시 종료한다. 오케스트레이터는 이미 마스킹된 입력만 받는다.
+- A/B/C 검색과 reranking, D단계 Tool 선택은 `retrieval_query`를 사용한다.
+- RAG 및 Tool 최종 답변 생성은 원본 의미를 보존한 `query`와 `session_context`를 사용한다.
 - `SUCCESS`는 성공 단계의 `route`와 답변을 즉시 반환한다.
 - A/B/C의 `NO_RESULT`, 단계가 반환한 `ERROR`, 예상 가능한 `ProviderError`는 다음 단계로 이동한다.
 - 단계가 `BLOCKED`를 반환하면 다음 단계를 실행하지 않는다.
@@ -363,15 +417,26 @@ class OrchestratorResult:
 - 예상하지 못한 구현 예외는 잡지 않고 전파해 HTTP 500으로 처리한다.
 - 단, `provider_call()` 블록 내부의 모든 예외는 현재 공통 정책에 따라 `ProviderError`로 변환된다.
 
-현재 단계 timeout은 A/B/C/D 모두 `120초`다. `asyncio.wait_for(asyncio.to_thread(...))`는 대기만 중단하고 thread를 종료하지 못하므로 timeout 발생 시 다음 단계를 실행하지 않고 `ERROR`를 즉시 반환한다. provider HTTP timeout은 단계 timeout보다 짧게 설정한다.
+현재 단계 timeout은 CONTEXT `30초`, A/B/C/D 각 `120초`다. `asyncio.wait_for(asyncio.to_thread(...))`는 대기만 중단하고 thread를 종료하지 못하므로 timeout 발생 시 다음 단계를 실행하지 않고 `ERROR`를 즉시 반환한다. provider HTTP timeout은 각 단계 timeout보다 짧게 설정한다.
 
 ### 챗봇 AI API 계약
 
 AI 서버의 내부 추론 endpoint는 `POST /api/v1/chat`이다. 세션과 메시지 저장은 BE가 담당하고, AI endpoint는 질문 한 건에 대한 답변·출처·전환 액션을 반환한다.
 
 ```python
+class SessionMessage(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    message_id: int = Field(gt=0)
+    sender_type: Literal["USER", "ASSISTANT"]
+    content: str = Field(min_length=1, max_length=4000)
+
 class ChatRequest(BaseModel):
-    question: str = Field(min_length=1)
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    question: str = Field(min_length=1, max_length=2000)
+    custom_prompt: str | None = Field(default=None, max_length=4000)
+    session_context: list[SessionMessage] = Field(default_factory=list)
 
 class SourceItem(BaseModel):
     candidate_id: str
@@ -386,14 +451,19 @@ class ChatResponse(BaseModel):
     sources: list[SourceItem]
     route: str | None = None
     action: str | None = None
+    step_history: list[StepHistoryItem]
 ```
 
-- 일반 사용자 요청에는 `custom_prompt`를 노출하지 않는다. SYSTEM_ADMIN 설정을 전달하는 신뢰된 BE 내부 계약이 확정된 후 추가한다.
+- JSON 요청은 camelCase를 사용하며 Pydantic 내부 필드는 snake_case로 유지한다.
+- BE는 `sessionContext`를 `messageId` 오름차순으로 전달하고 현재 `question`은 중복 포함하지 않는다.
+- `senderType=SYSTEM`, 공백 질문, 공백 메시지 내용은 `422`다.
+- `customPrompt`는 일반 사용자가 직접 작성하는 값이 아니라 신뢰된 BE가 활성 SYSTEM_ADMIN 설정을 전달하는 내부 계약이다.
 - 실제 검색에 전달하지 않는 `top_k`도 요청에서 받지 않는다.
 - 출처의 `source_type`, `source_id`는 Qdrant metadata를 정본으로 사용하고 `candidate_id` 파싱은 fallback으로만 사용한다.
 - 출처 식별값이 없으면 빈 출처를 반환하지 않고 오류로 처리한다.
 - `BLOCKED`는 고정 안전 응답, `NO_RESULT + CREATE_TICKET`은 티켓 전환 안내를 반환한다.
 - `ERROR`는 근거 없음으로 위장하지 않고 일시적 오류와 재시도를 안내하는 별도 응답으로 변환한다.
+- contextualize의 예상 가능한 실패는 원본 질문 fallback 후 `CONTEXT/ERROR` 이력을 포함한 정상 처리로 이어진다.
 
 ## 완료 기준
 
@@ -415,6 +485,7 @@ class ChatResponse(BaseModel):
 - `RagChain`, 구조화 답변 스키마, 기본/custom prompt, 인용 검증과 관련 단위 테스트가 구현되어 있다.
 - LLM 파싱 실패 1회 재시도와 provider 오류의 즉시 `ERROR` 변환이 구현되어 있다.
 - `RagOrchestrator`, `ChatbotService`, `/api/v1/chat` 연결과 endpoint 상태 변환이 구현되어 있다.
+- 세션 컨텍스트 요청 계약, history-aware retrieval query 분리와 contextualize timeout 설계가 확정되어 구현 중이다.
 - D단계 Tool Calling 설계와 구현 계획은 `docs/domain-guides/tool-integration.md`에 통합되어 있다. Tool domain 컴포넌트는 구현 중이며 `ToolCallingStep` 연결과 BE HTTP adapter는 남아 있다.
 - 실제 Qdrant 통합 테스트, `doc_id` payload index, scroll pagination은 남아 있다.
 - 실제 Ollama 통합 테스트와 평가셋 기반 reranker 임계값 보정은 남아 있다.
@@ -425,6 +496,5 @@ class ChatResponse(BaseModel):
 - Cross-Encoder 점수 정규화와 `NO_RESULT` 임계값
 - embedding 모델 변경 시 collection 재색인 절차
 - Qdrant payload index와 통합 테스트 범위
-- provider HTTP timeout과 단계 timeout의 정렬
-- SYSTEM_ADMIN custom prompt의 신뢰된 BE→AI 전달 계약
+- provider별 contextualize HTTP timeout 동작의 실제 통합 검증
 - `BLOCKED`와 `ERROR` 사용자 안내 문구

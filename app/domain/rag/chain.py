@@ -2,7 +2,7 @@ import json
 from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 import logging
 
@@ -10,6 +10,7 @@ from app.common.exceptions import ProviderError, provider_call
 
 logger = logging.getLogger(__name__)
 from app.core.config import RERANK_SCORE_THRESHOLD
+from app.domain.chatbot.schemas import SessionMessage
 from app.domain.rag.prompt import build_context, build_system_prompt
 from app.domain.rag.schemas import GeneratedAnswer, RagResult, RagStatus, RerankedCandidate
 from app.infra.llm.factory import get_llm
@@ -52,6 +53,7 @@ class RagChain:
         query: str,
         candidates: list[RerankedCandidate],
         custom_prompt: str | None = None,
+        session_context: list[SessionMessage] | None = None,
     ) -> RagResult:
         # NO_RESULT 조건 1: 후보 없음
         if not candidates:
@@ -61,8 +63,16 @@ class RagChain:
         if candidates[0].score < RERANK_SCORE_THRESHOLD:
             return RagResult(status=RagStatus.NO_RESULT)
 
+        history_messages = []
+        for msg in (session_context or []):
+            if msg.sender_type == "USER":
+                history_messages.append(HumanMessage(content=msg.content))
+            else:
+                history_messages.append(AIMessage(content=msg.content))
+
         messages = [
             SystemMessage(content=build_system_prompt(custom_prompt)),
+            *history_messages,
             HumanMessage(content=f"[Context]\n{build_context(candidates)}\n\n[Question]\n{query}"),
         ]
 

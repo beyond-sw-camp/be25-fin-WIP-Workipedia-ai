@@ -1,7 +1,8 @@
 import json
 from typing import Literal
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from app.domain.chatbot.schemas import SessionMessage
 from pydantic import BaseModel, model_validator
 
 from app.common.exceptions import MaskingBlockedError, ProviderError
@@ -59,14 +60,23 @@ class ToolResultChain:
         query: str,
         result: ToolExecutionResult,
         custom_prompt: str | None,
+        session_context: list[SessionMessage] | None = None,
     ) -> RagResult:
         try:
             masked_text = _mask_tool_result(result.data)
         except MaskingBlockedError:
             return RagResult(status=RagStatus.BLOCKED)
 
+        history_messages = []
+        for msg in (session_context or []):
+            if msg.sender_type == "USER":
+                history_messages.append(HumanMessage(content=msg.content))
+            else:
+                history_messages.append(AIMessage(content=msg.content))
+
         messages = [
             SystemMessage(content=build_tool_system_prompt(custom_prompt)),
+            *history_messages,
             HumanMessage(content=f"[Tool Result]\n{masked_text}\n\n[Question]\n{query}"),
         ]
 

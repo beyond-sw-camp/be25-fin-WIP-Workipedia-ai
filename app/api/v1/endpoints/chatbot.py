@@ -37,7 +37,11 @@ def _to_source_item(ref) -> SourceItem:
 
 @router.post("", response_model=ChatResponse)
 async def chat(request: ChatRequest) -> ChatResponse:
-    result = await chatbot_service.ask(request.question)
+    result = await chatbot_service.ask(
+        request.question,
+        custom_prompt=request.custom_prompt,
+        session_context=request.session_context,
+    )
     logger.warning("step_history: %s", _to_step_history(result.step_history))
 
     if result.status == RagStatus.BLOCKED:

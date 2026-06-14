@@ -1,9 +1,9 @@
 import asyncio
 from typing import Protocol
 
-from app.common.exceptions import MaskingBlockedError, ProviderError
-from app.common.masking import masker
+from app.common.exceptions import ProviderError
 from app.core.config import COLLECTION_MAP, STEP_TIMEOUT
+from app.domain.chatbot.schemas import SessionMessage
 from app.domain.rag.chain import RagChain
 from app.domain.rag.schemas import OrchestratorResult, RagResult, RagStatus, StepRecord
 from app.domain.rag.service import RagService
@@ -19,7 +19,7 @@ class StepRunner(Protocol):
     step_name: str
     timeout: float
 
-    def run(self, query: str, custom_prompt: str | None) -> RagResult:
+    def run(self, query: str, retrieval_query: str, custom_prompt: str | None, session_context: list) -> RagResult:
         ...
 
 
@@ -33,9 +33,9 @@ class ManualRagStep:
         self._service = RagService()
         self._chain = RagChain()
 
-    def run(self, query: str, custom_prompt: str | None) -> RagResult:
-        candidates = self._service.search_and_rerank(query, COLLECTION_MAP["MANUAL"])
-        return self._chain.generate(query, candidates, custom_prompt)
+    def run(self, query: str, retrieval_query: str, custom_prompt: str | None, session_context: list[SessionMessage]) -> RagResult:
+        candidates = self._service.search_and_rerank(retrieval_query, COLLECTION_MAP["MANUAL"])
+        return self._chain.generate(query, candidates, custom_prompt, session_context)
 
 
 # ── B단계: 워키 RAG ───────────────────────────────────────────────────────────
@@ -48,9 +48,9 @@ class WorkiRagStep:
         self._service = RagService()
         self._chain = RagChain()
 
-    def run(self, query: str, custom_prompt: str | None) -> RagResult:
-        candidates = self._service.search_and_rerank(query, COLLECTION_MAP["WORKI"])
-        return self._chain.generate(query, candidates, custom_prompt)
+    def run(self, query: str, retrieval_query: str, custom_prompt: str | None, session_context: list[SessionMessage]) -> RagResult:
+        candidates = self._service.search_and_rerank(retrieval_query, COLLECTION_MAP["WORKI"])
+        return self._chain.generate(query, candidates, custom_prompt, session_context)
 
 
 # ── C단계: 지식 RAG ───────────────────────────────────────────────────────────
@@ -63,9 +63,9 @@ class KnowledgeRagStep:
         self._service = RagService()
         self._chain = RagChain()
 
-    def run(self, query: str, custom_prompt: str | None) -> RagResult:
-        candidates = self._service.search_knowledge(query)
-        return self._chain.generate(query, candidates, custom_prompt)
+    def run(self, query: str, retrieval_query: str, custom_prompt: str | None, session_context: list[SessionMessage]) -> RagResult:
+        candidates = self._service.search_knowledge(retrieval_query)
+        return self._chain.generate(query, candidates, custom_prompt, session_context)
 
 
 # ── D단계: Tool Calling ───────────────────────────────────────────────────────
@@ -82,8 +82,8 @@ class ToolCallingStep:
             result_chain=ToolResultChain(),
         )
 
-    def run(self, query: str, custom_prompt: str | None) -> RagResult:
-        return self._service.run(query, custom_prompt)
+    def run(self, query: str, retrieval_query: str, custom_prompt: str | None, session_context: list[SessionMessage]) -> RagResult:
+        return self._service.run(query, retrieval_query, custom_prompt, session_context)
 
 
 # ── 폴백 오케스트레이터 ────────────────────────────────────────────────────────
@@ -94,17 +94,23 @@ class RagOrchestrator:
             ManualRagStep(), WorkiRagStep(), KnowledgeRagStep(), ToolCallingStep(),
         ]
 
-    async def run(self, query: str, custom_prompt: str | None = None) -> OrchestratorResult:
-        try:
-            masked_query = masker.mask(query)
-        except MaskingBlockedError:
-            return OrchestratorResult(status=RagStatus.BLOCKED, step_history=[])
+    async def run(
+        self,
+        query: str,
+        retrieval_query: str | None = None,
+        custom_prompt: str | None = None,
+        session_context: list[SessionMessage] | None = None,
+    ) -> OrchestratorResult:
+        if retrieval_query is None:
+            retrieval_query = query
+        if session_context is None:
+            session_context = []
 
         history: list[StepRecord] = []
         for step in self._steps:
             try:
                 result = await asyncio.wait_for(
-                    asyncio.to_thread(step.run, masked_query, custom_prompt),
+                    asyncio.to_thread(step.run, query, retrieval_query, custom_prompt, session_context),
                     timeout=step.timeout,
                 )
             except asyncio.TimeoutError:
@@ -112,7 +118,7 @@ class RagOrchestrator:
                 return OrchestratorResult(status=RagStatus.ERROR, step_history=history)
             except ProviderError as exc:
                 history.append(StepRecord(step=step.step_name, status=RagStatus.ERROR, error_message=exc.message))
-                if step.step_name == "D":  # Tool 장애는 CREATE_TICKET이 아닌 ERROR
+                if step.step_name == "D":
                     return OrchestratorResult(status=RagStatus.ERROR, step_history=history)
                 continue
 

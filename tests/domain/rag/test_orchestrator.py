@@ -73,7 +73,7 @@ def test_tool_calling_step_returns_no_result():
     mock_service.run.return_value = RagResult(status=RagStatus.NO_RESULT)
     step = ToolCallingStep(service=mock_service)
     assert step.step_name == "D"
-    result = step.run("질문", None)
+    result = step.run("질문", "질문", None, [])
     assert result.status == RagStatus.NO_RESULT
 
 
@@ -92,13 +92,13 @@ def test_manual_rag_step_delegates_to_service_and_chain():
         MockChain.return_value.generate.return_value = expected
 
         step = ManualRagStep()
-        result = step.run("매뉴얼 질문", "custom")
+        result = step.run("매뉴얼 질문", "매뉴얼 질문 검색용", "custom", [])
 
     MockService.return_value.search_and_rerank.assert_called_once()
     call_args = MockService.return_value.search_and_rerank.call_args
-    assert call_args[0][0] == "매뉴얼 질문"
+    assert call_args[0][0] == "매뉴얼 질문 검색용"
     assert "manual_chunks" in call_args[0][1]
-    MockChain.return_value.generate.assert_called_once_with("매뉴얼 질문", candidates, "custom")
+    MockChain.return_value.generate.assert_called_once_with("매뉴얼 질문", candidates, "custom", [])
     assert result is expected
 
 
@@ -116,9 +116,9 @@ def test_knowledge_rag_step_uses_search_knowledge():
         MockChain.return_value.generate.return_value = expected
 
         step = KnowledgeRagStep()
-        result = step.run("지식 질문", None)
+        result = step.run("지식 질문", "지식 질문 검색용", None, [])
 
-    MockService.return_value.search_knowledge.assert_called_once_with("지식 질문")
+    MockService.return_value.search_knowledge.assert_called_once_with("지식 질문 검색용")
     assert result is expected
 
 
@@ -136,17 +136,12 @@ def _make_step(name: str, result: RagResult) -> MagicMock:
 # ── 마스킹 ──────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_masking_blocked_returns_blocked():
+async def test_no_steps_returns_create_ticket():
     from app.domain.rag.orchestrator import RagOrchestrator
-    from app.common.exceptions import MaskingBlockedError
-
-    with patch("app.domain.rag.orchestrator.masker") as mock_masker:
-        mock_masker.mask.side_effect = MaskingBlockedError("개인정보 감지")
-        orch = RagOrchestrator(steps=[])
-        result = await orch.run("주민번호 123-456")
-
-    assert result.status == RagStatus.BLOCKED
-    assert result.step_history == []
+    orch = RagOrchestrator(steps=[])
+    result = await orch.run("질문")
+    assert result.status == RagStatus.NO_RESULT
+    assert result.action == "CREATE_TICKET"
 
 
 # ── SUCCESS ──────────────────────────────────────────────────────────────────
@@ -252,7 +247,7 @@ async def test_timeout_stops_chain_immediately():
     step_a = MagicMock()
     step_a.step_name = "A"
     step_a.timeout = 0.01  # 10ms — 의도적 timeout
-    step_a.run = MagicMock(side_effect=lambda q, p: __import__('time').sleep(1) or RagResult(status=RagStatus.SUCCESS, answer=_make_answer()))
+    step_a.run = MagicMock(side_effect=lambda q, rq, p, sc: __import__('time').sleep(1) or RagResult(status=RagStatus.SUCCESS, answer=_make_answer()))
 
     step_b = _make_step("B", RagResult(status=RagStatus.SUCCESS, answer=_make_answer()))
 
