@@ -7,7 +7,7 @@ from app.core.config import COLLECTION_MAP, STEP_TIMEOUT
 from app.domain.rag.chain import RagChain
 from app.domain.rag.schemas import OrchestratorResult, RagResult, RagStatus, StepRecord
 from app.domain.rag.service import RagService
-from app.domain.tool.result_chain import ToolResultChain
+from app.domain.tool.chain import ToolResultChain
 from app.domain.tool.selector import ToolSelector
 from app.domain.tool.service import ToolService
 from app.domain.tool.validator import InputValidator

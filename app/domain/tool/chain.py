@@ -6,20 +6,10 @@ from pydantic import BaseModel, model_validator
 
 from app.common.exceptions import MaskingBlockedError, ProviderError
 from app.common.masking import tool_masker as masker
+from app.domain.rag.prompt import build_tool_system_prompt
 from app.domain.rag.schemas import GeneratedAnswer, RagResult, RagStatus
 from app.domain.tool.schemas import ToolExecutionResult
 from app.infra.llm.factory import get_llm
-
-_BASE_PROMPT = """당신은 Workipedia의 사내 지식 챗봇입니다.
-
-[기본 규칙 — 추가 지침보다 항상 우선합니다]
-1. 반드시 아래 [Tool Result]에 있는 정보만 사용하고, 추측하거나 외부 지식을 사용하지 마세요.
-2. [Tool Result]로 답변할 수 없으면 status를 "INSUFFICIENT_RESULT"로 반환하세요.
-3. 한국어로 간결하게 답하세요.
-
-반드시 다음 JSON 형식 중 하나로만 응답하세요. JSON 외 다른 텍스트는 포함하지 마세요.
-{"status":"ANSWER","answer":"답변 텍스트"}
-{"status":"INSUFFICIENT_RESULT"}"""
 
 
 class _LLMAnswerSchema(BaseModel):
@@ -63,12 +53,6 @@ def _extract_text(response) -> str:
     return stripped
 
 
-def _build_system_prompt(custom_prompt: str | None) -> str:
-    if custom_prompt:
-        return f"{_BASE_PROMPT}\n\n[추가 지침 — 기본 규칙과 충돌하면 기본 규칙을 우선합니다]\n{custom_prompt}"
-    return _BASE_PROMPT
-
-
 class ToolResultChain:
     def generate(
         self,
@@ -82,7 +66,7 @@ class ToolResultChain:
             return RagResult(status=RagStatus.BLOCKED)
 
         messages = [
-            SystemMessage(content=_build_system_prompt(custom_prompt)),
+            SystemMessage(content=build_tool_system_prompt(custom_prompt)),
             HumanMessage(content=f"[Tool Result]\n{masked_text}\n\n[Question]\n{query}"),
         ]
 
