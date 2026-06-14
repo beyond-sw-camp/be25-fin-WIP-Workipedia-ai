@@ -442,6 +442,7 @@ class SourceItem(BaseModel):
     candidate_id: str
     source_type: str
     source_id: str
+    chunk_index: int | None = None
     title: str
     score: float
     link: str | None = None
@@ -459,7 +460,7 @@ class ChatResponse(BaseModel):
 - `senderType=SYSTEM`, 공백 질문, 공백 메시지 내용은 `422`다.
 - `customPrompt`는 일반 사용자가 직접 작성하는 값이 아니라 신뢰된 BE가 활성 SYSTEM_ADMIN 설정을 전달하는 내부 계약이다.
 - 실제 검색에 전달하지 않는 `top_k`도 요청에서 받지 않는다.
-- 출처의 `source_type`, `source_id`는 Qdrant metadata를 정본으로 사용하고 `candidate_id` 파싱은 fallback으로만 사용한다.
+- 출처의 `source_type`, `source_id`, `chunk_index`는 Qdrant metadata를 정본으로 사용하고 `candidate_id` 파싱은 fallback으로만 사용한다. metadata 값이 변환 불가이거나 음수이면 `candidate_id` 파싱으로 재시도하고, 둘 다 실패하면 `null`을 반환한다.
 - 출처 식별값이 없으면 빈 출처를 반환하지 않고 오류로 처리한다.
 - `BLOCKED`는 고정 안전 응답, `NO_RESULT + CREATE_TICKET`은 티켓 전환 안내를 반환한다.
 - `ERROR`는 근거 없음으로 위장하지 않고 일시적 오류와 재시도를 안내하는 별도 응답으로 변환한다.
