@@ -9,10 +9,10 @@ _MAX_RETRIES = 2
 
 
 class AnthropicClient(BaseLLMClient):
-    def get_model(self) -> BaseChatModel:
+    def get_model(self, request_timeout: float | None = None) -> BaseChatModel:
         return ChatAnthropic(
             api_key=settings.anthropic_api_key,
             model=CHAT_MODEL_MAP["anthropic"],
-            timeout=_TIMEOUT,
+            timeout=request_timeout if request_timeout is not None else _TIMEOUT,
             max_retries=_MAX_RETRIES,
         )

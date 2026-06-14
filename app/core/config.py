@@ -1,5 +1,6 @@
 from enum import Enum
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,6 +27,8 @@ class Settings(BaseSettings):
     tool_client: str = "stub"           # "stub" | "workipedia"
     be_base_url: str = "http://localhost:8080"
     tool_http_timeout: float = 25.0     # D단계 전체 timeout(120s)보다 짧게
+    max_context_messages: int = Field(default=10, ge=0)
+    contextualize_llm_timeout: float = Field(default=25.0, gt=0, lt=30.0)
 
     # 인프라 URL / Port
     ollama_base_url: str = "http://localhost:11434"
@@ -131,6 +134,7 @@ KNOWLEDGE_SYNC_CONFIG: dict[str, dict[str, str]] = {
 # 폴백 단계별 timeout (초)
 # ---------------------------------------------------------------------------
 STEP_TIMEOUT: dict[str, float] = {
+    "CONTEXT": 30.0,
     "A": 120.0,
     "B": 120.0,
     "C": 120.0,
