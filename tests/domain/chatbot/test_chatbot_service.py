@@ -3,6 +3,36 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.domain.rag.schemas import OrchestratorResult, RagStatus
+from app.domain.chatbot.schemas import ChatRequest, SessionMessage
+
+
+def test_session_message_valid():
+    msg = SessionMessage(messageId=1, senderType="USER", content="안녕")
+    assert msg.message_id == 1
+    assert msg.sender_type == "USER"
+
+def test_session_message_rejects_system():
+    with pytest.raises(Exception):
+        SessionMessage(messageId=1, senderType="SYSTEM", content="x")
+
+def test_session_message_blank_content_rejected():
+    with pytest.raises(Exception):
+        SessionMessage(messageId=1, senderType="USER", content="   ")
+
+def test_chat_request_default_context():
+    req = ChatRequest(question="질문")
+    assert req.session_context == []
+    assert req.custom_prompt is None
+
+def test_chat_request_with_context():
+    req = ChatRequest(
+        question="며칠 전에?",
+        customPrompt="친절하게",
+        sessionContext=[{"messageId": 1, "senderType": "USER", "content": "연차 어떻게?"},
+                       {"messageId": 2, "senderType": "ASSISTANT", "content": "HR 포털"}]
+    )
+    assert len(req.session_context) == 2
+    assert req.custom_prompt == "친절하게"
 
 
 @pytest.fixture
