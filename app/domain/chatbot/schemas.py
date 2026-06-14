@@ -38,6 +38,7 @@ class SourceItem(BaseModel):
     candidate_id: str
     source_type: str
     source_id: str
+    chunk_index: int | None = None
     title: str
     score: float
     link: str | None = None

@@ -17,6 +17,25 @@ def _to_step_history(history) -> list[StepHistoryItem]:
     return [StepHistoryItem(step=s.step, status=s.status.value, error_message=s.error_message) for s in history]
 
 
+def _extract_chunk_index(raw: object, parts: list[str]) -> int | None:
+    """metadata 값 우선, 실패하면 candidate_id 파싱 fallback. 음수이면 None."""
+    if raw is not None:
+        try:
+            v = int(raw)
+            if v >= 0:
+                return v
+        except (ValueError, TypeError):
+            pass
+    if len(parts) == 3:
+        try:
+            v = int(parts[2])
+            if v >= 0:
+                return v
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
 def _to_source_item(ref) -> SourceItem:
     parts = ref.candidate_id.split(":", 2)
     parsed_source_type = parts[0] if len(parts) > 1 else ""
@@ -25,10 +44,12 @@ def _to_source_item(ref) -> SourceItem:
     source_id = str(ref.metadata.get("source_id") or parsed_source_id)
     if not source_type or not source_id:
         raise ValueError(f"출처 정보를 확인할 수 없는 candidate: {ref.candidate_id!r}")
+    chunk_index = _extract_chunk_index(ref.metadata.get("chunk_index"), parts)
     return SourceItem(
         candidate_id=ref.candidate_id,
         source_type=source_type,
         source_id=source_id,
+        chunk_index=chunk_index,
         title=ref.metadata.get("title", ref.candidate_id),
         score=ref.score,
         link=ref.metadata.get("link"),
