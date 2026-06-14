@@ -104,6 +104,8 @@ API Layer
 
 `POST /api/v1/tickets/routing`은 티켓 제목과 내용을 부서 R&R 및 승인 처리 사례와 비교해 부서 후보를 반환하는 AI 내부 endpoint다. 같은 embedding으로 `routing_dept_rr`와 `routing_cases`를 검색하고, 부서별 context를 Cross-Encoder로 reranking한 뒤 AI가 `AUTO_ASSIGNED` 또는 `COMMON_QUEUE`를 결정한다. 상세 계약은 `docs/domain-guides/ticket-routing-ai.md`를 정본으로 사용한다.
 
+`POST /api/v1/knowledge/sync`과 `DELETE /api/v1/knowledge/{source_id}`는 부서 R&R과 승인 라우팅 사례를 단건 동기화·삭제한다. 라우팅 지식은 source당 단일 deterministic point로 저장하며, source type별 collection과 metadata 계약은 `docs/domain-guides/ticket-routing-ai.md`를 따른다.
+
 ## Provider 구현
 
 ```text
@@ -128,6 +130,7 @@ EmbeddingProvider
 
 - 문서 chunking, embedding, retrieval
 - `POST /api/v1/documents/ingest` 인덱싱과 `DELETE /api/v1/documents/{source_id}?source_type=...` 삭제
+- `POST /api/v1/knowledge/sync` 라우팅 지식 upsert와 `DELETE /api/v1/knowledge/{source_id}?sourceType=...` 삭제
 - source type별 마스킹·청킹 설정 적용
 - source type별 Qdrant collection과 deterministic UUID point ID 관리
 - provider별 embedding vector size 관리

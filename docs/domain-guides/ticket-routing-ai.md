@@ -124,7 +124,7 @@ metadata:
 처리 사례 payload 예:
 
 ```text
-chunk_id: ROUTING_CASE:{department_id}:{chunk_index}
+chunk_id: ROUTING_CASE:{routing_case_id}:{chunk_index}
 text: "ERP 계정 잠금 문제를 해결했다"
 metadata:
   department_id: 1
@@ -133,6 +133,93 @@ metadata:
 ```
 
 `department_id` 또는 `department_name`이 없는 검색 결과는 응답 후보로 사용할 수 없으므로 제외한다.
+
+## 라우팅 지식 동기화 API
+
+부서 R&R과 승인된 처리 사례는 BE가 AI 내부 API로 단건 동기화한다. 기존 매뉴얼·워키·승인 지식·수기 지식의 파일 업로드 인덱싱 경로와 분리하며, 라우팅 지식은 청킹하지 않고 source당 point 하나로 저장한다.
+
+```text
+POST /api/v1/knowledge/sync
+DELETE /api/v1/knowledge/{source_id}?sourceType=DEPT_RR
+```
+
+등록·수정 요청:
+
+```json
+{
+  "sourceId": 3,
+  "sourceType": "DEPT_RR",
+  "title": "개발1팀 R&R",
+  "content": "개발1팀은 RAG 파이프라인과 LLM 연동을 담당한다.",
+  "departmentId": 3,
+  "departmentName": "개발1팀"
+}
+```
+
+등록·수정 응답:
+
+```json
+{
+  "sourceId": 3,
+  "syncedChunks": 1
+}
+```
+
+삭제 응답:
+
+```json
+{
+  "sourceId": 3,
+  "deletedChunks": 1
+}
+```
+
+없는 데이터를 삭제해도 멱등 성공으로 처리하고 `deletedChunks: 0`을 반환한다.
+
+### 입력 계약
+
+- `sourceType`은 `DEPT_RR`, `ROUTING_CASE`만 허용한다.
+- `sourceId`와 `departmentId`는 0보다 커야 한다.
+- `title`, `content`, `departmentName`은 공백 문자열을 허용하지 않는다.
+- `DEPT_RR`의 `sourceId`는 부서 ID이며 `departmentId`와 같아야 한다.
+- `ROUTING_CASE`의 `sourceId`는 부서 ID가 아니라 승인된 라우팅 사례의 고유 ID다.
+- 요청·응답 JSON은 camelCase, Python 내부 필드는 snake_case로 관리한다.
+
+### 저장 계약
+
+| sourceType | collection | metadata `type` |
+|---|---|---|
+| `DEPT_RR` | `routing_dept_rr` | `rr` |
+| `ROUTING_CASE` | `routing_cases` | `case` |
+
+저장 본문과 임베딩 입력은 모두 `title + "\n" + content`다. 논리 chunk ID는 `{sourceType}:{sourceId}:0`, `doc_id`는 `{sourceType}:{sourceId}`이며 Qdrant adapter가 논리 chunk ID를 deterministic UUID point ID로 변환한다.
+
+```json
+{
+  "doc_id": "ROUTING_CASE:105",
+  "source_type": "ROUTING_CASE",
+  "source_id": 105,
+  "title": "ERP 접근 장애 처리 사례",
+  "department_id": 3,
+  "department_name": "개발1팀",
+  "type": "case"
+}
+```
+
+라우팅 지식은 1청크 고정이므로 수정 시 선행 삭제 없이 같은 ID로 upsert한다. 동일 요청의 재호출은 같은 point를 교체하며 중복 point를 만들지 않는다. DELETE는 `doc_id` 기준으로 삭제한다.
+
+deterministic ID는 작업 순서를 보장하지 않는다. 동일 source의 최신 작업 우선, 오래된 실패 작업 무효화, UPSERT 이후 DELETE 정합성은 BE #84의 `ai_sync_jobs` 워커가 보장한다. AI API는 deterministic ID 기반 멱등 저장과 삭제를 담당한다.
+
+### 동기화 오류 계약
+
+| 상황 | 처리 |
+|---|---|
+| 필수 필드 누락, 공백, 0 이하 ID | HTTP 422 |
+| `DEPT_RR`의 `sourceId`와 `departmentId` 불일치 | HTTP 422 |
+| embedding 또는 Qdrant 실패 | HTTP 500 |
+| 삭제 대상 없음 | HTTP 200, `deletedChunks: 0` |
+
+provider 내부 오류는 응답에 노출하지 않는다. 마스킹은 AI #31 후속 범위이며, 적용 전에는 BE가 개인정보를 포함하지 않은 라우팅 지식만 전달한다. 로컬·클라우드 embedding provider는 모두 허용한다.
 
 ## 처리 파이프라인
 
@@ -226,7 +313,12 @@ ROUTING_CASES_COLLECTION = "routing_cases"
 ```text
 app/
 ├── api/v1/endpoints/ticket_routing.py
+├── api/v1/endpoints/knowledge_sync.py
 ├── domain/ticket_routing/
+│   ├── __init__.py
+│   ├── schemas.py
+│   └── service.py
+├── domain/knowledge_sync/
 │   ├── __init__.py
 │   ├── schemas.py
 │   └── service.py
@@ -246,6 +338,9 @@ app/
 | `RagRetriever.search_by_embedding()` | 기존 embedding으로 Qdrant 검색 |
 | `CrossEncoderReranker` | 부서 후보 relevance score 계산 |
 | `ticket_routing.py` | HTTP 계약과 provider 오류 변환 |
+| `KnowledgeSyncRequest` | source type, ID 정합성, 공백 입력 검증 |
+| `KnowledgeSyncService` | 라우팅 지식 embedding, deterministic upsert, 삭제 |
+| `knowledge_sync.py` | 동기화·삭제 HTTP 계약과 provider 오류 변환 |
 
 ## 오류 계약
 
@@ -272,6 +367,13 @@ endpoint는 외부 provider 오류의 내부 메시지를 그대로 노출하지
 - camelCase 요청·응답
 - nullable `sourceChatbotMessageId`
 - title/content 공백 또는 누락 시 422
+- 라우팅 지식 source type별 collection과 metadata `type`
+- 동일 라우팅 지식 재호출 시 같은 논리 chunk ID 사용
+- `DEPT_RR`의 `sourceId`와 `departmentId` 불일치 및 공백 입력 시 422
+- embedding 실패 시 upsert 미호출
+- Qdrant upsert·삭제 실패 시 내부 메시지를 숨긴 HTTP 500
+- 없는 라우팅 지식 삭제 시 `deletedChunks: 0`
+- 동기화·삭제 응답 camelCase
 - 기존 RAG 테스트 회귀
 
 ## 처리 사례 기반 동적 갱신
@@ -297,7 +399,7 @@ endpoint는 외부 provider 오류의 내부 메시지를 그대로 노출하지
 
 ## 보안 후속 범위
 
-데이터 유형별 마스킹 정책은 AI #31에서 별도로 정리한다. 라우팅 사례 인덱싱과 실시간 티켓 질의의 마스킹 수준, 클라우드 embedding provider 전달 정책은 해당 이슈의 확정안을 따른다.
+데이터 유형별 마스킹 정책은 AI #31에서 별도로 정리한다. 라우팅 사례 인덱싱과 실시간 티켓 질의의 마스킹 수준은 해당 이슈의 확정안을 따른다.
 
 원문과 개인정보를 로그에 직접 남기지 않는 원칙은 유지한다.
 

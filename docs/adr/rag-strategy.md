@@ -32,6 +32,9 @@ AI 지식 전략은 **RAG 중심 아키텍처**로 통일한다.
 - collection 생성 시 provider별 vector size를 사용한다. `local`은 1024, `openai`는 1536, `google`은 768이다.
 - embedding provider나 모델을 변경할 때 기존 collection 차원과 맞지 않으면 신규 collection을 생성하고 재색인한다.
 - point ID는 `{source_type}:{source_id}:{chunk_index}`를 기반으로 생성한 deterministic UUID를 사용한다.
+- 부서 R&R과 승인된 라우팅 사례는 청킹하지 않고 `{source_type}:{source_id}:0` 단일 point로 upsert한다.
+- 단일 point 수정은 선행 삭제 없이 같은 deterministic ID로 교체하고, 삭제는 `doc_id` payload 기준으로 처리한다.
+- deterministic ID가 보장하는 범위는 중복 방지까지다. 동일 source 작업의 순서와 오래된 재시도 무효화는 BE `ai_sync_jobs`가 담당한다.
 - Qdrant의 원본 score는 검색 후보 점수로 보존하고, Cross-Encoder reranking 점수와 혼합하지 않는다.
 
 우선 구현 대상:
