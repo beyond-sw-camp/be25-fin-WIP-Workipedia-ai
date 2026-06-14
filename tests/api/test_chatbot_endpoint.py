@@ -43,7 +43,9 @@ def test_chat_success_response(client):
         route="A",
     )
 
-    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch:
+    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.masker") as mock_masker:
+        mock_masker.mask.side_effect = lambda x: x
         mock_orch.run = AsyncMock(return_value=orch_result)
         response = client.post("/api/v1/chat", json={"question": "휴가 신청 방법"})
 
@@ -63,7 +65,9 @@ def test_chat_success_response(client):
 def test_chat_blocked_returns_400(client):
     orch_result = OrchestratorResult(status=RagStatus.BLOCKED)
 
-    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch:
+    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.masker") as mock_masker:
+        mock_masker.mask.side_effect = lambda x: x
         mock_orch.run = AsyncMock(return_value=orch_result)
         response = client.post("/api/v1/chat", json={"question": "민감한 질문"})
 
@@ -75,7 +79,9 @@ def test_chat_blocked_returns_400(client):
 def test_chat_create_ticket_action(client):
     orch_result = OrchestratorResult(status=RagStatus.NO_RESULT, action="CREATE_TICKET")
 
-    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch:
+    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.masker") as mock_masker:
+        mock_masker.mask.side_effect = lambda x: x
         mock_orch.run = AsyncMock(return_value=orch_result)
         response = client.post("/api/v1/chat", json={"question": "해결 안 되는 질문"})
 
@@ -91,7 +97,9 @@ def test_chat_create_ticket_action(client):
 def test_chat_error_response(client):
     orch_result = OrchestratorResult(status=RagStatus.ERROR)
 
-    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch:
+    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.masker") as mock_masker:
+        mock_masker.mask.side_effect = lambda x: x
         mock_orch.run = AsyncMock(return_value=orch_result)
         response = client.post("/api/v1/chat", json={"question": "질문"})
 
@@ -105,4 +113,43 @@ def test_chat_error_response(client):
 
 def test_chat_empty_question_returns_422(client):
     response = client.post("/api/v1/chat", json={"question": ""})
+    assert response.status_code == 422
+
+
+def test_chat_with_session_context(client):
+    answer = GeneratedAnswer(answer="3일 전에 해야 합니다.", references=[])
+    orch_result = OrchestratorResult(status=RagStatus.SUCCESS, answer=answer, route="A", step_history=[])
+
+    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.masker") as mock_masker, \
+         patch("app.domain.chatbot.service.asyncio.wait_for", new_callable=AsyncMock) as mock_wait:
+        mock_masker.mask.side_effect = lambda x: x
+        mock_wait.return_value = "contextualized"
+        mock_orch.run = AsyncMock(return_value=orch_result)
+        response = client.post("/api/v1/chat", json={
+            "question": "며칠 전에?",
+            "customPrompt": "친절하게",
+            "sessionContext": [
+                {"messageId": 1, "senderType": "USER", "content": "연차 어떻게?"},
+                {"messageId": 2, "senderType": "ASSISTANT", "content": "HR 포털"},
+            ]
+        })
+
+    assert response.status_code == 200
+    assert response.json()["answer"] == "3일 전에 해야 합니다."
+
+
+def test_chat_system_sender_type_rejected(client):
+    response = client.post("/api/v1/chat", json={
+        "question": "질문",
+        "sessionContext": [{"messageId": 1, "senderType": "SYSTEM", "content": "시스템"}]
+    })
+    assert response.status_code == 422
+
+
+def test_chat_blank_session_content_rejected(client):
+    response = client.post("/api/v1/chat", json={
+        "question": "질문",
+        "sessionContext": [{"messageId": 1, "senderType": "USER", "content": "   "}]
+    })
     assert response.status_code == 422
