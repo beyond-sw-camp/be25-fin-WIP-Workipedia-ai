@@ -482,6 +482,21 @@ WebSocket/STOMP:
 - endpoint 테스트는 `SUCCESS`, `BLOCKED`, `CREATE_TICKET`, `ERROR`, 빈 질문 `422`를 포함한다.
 - 오케스트레이터와 endpoint는 구현되어 있다. D단계 Tool Calling 실제 연동은 이슈 #11 범위로 남아 있다.
 
+### 8.8 티켓 부서 라우팅
+
+- AI 내부 API는 `POST /api/v1/tickets/routing`이다.
+- 요청은 `title`, `content`, 선택적 `sourceChatbotMessageId`를 받는다.
+- BE 연동 JSON은 camelCase이며 AI 내부 Pydantic 필드는 alias 설정을 통해 snake_case로 관리한다.
+- 질의 embedding은 한 번 생성하고 `routing_dept_rr`, `routing_cases` 두 collection 검색에 재사용한다.
+- collection별 top 20 검색 결과를 부서 ID로 그룹화하고 vector 최고 점수 기준 상위 3개 부서를 선택한다.
+- 부서별 R&R 상위 1개와 승인 사례 상위 3개를 context로 구성해 로컬 Cross-Encoder로 reranking한다.
+- AI가 1위 raw score와 1·2위 score margin을 계산해 `AUTO_ASSIGNED` 또는 `COMMON_QUEUE`를 결정한다.
+- 후보 부서가 하나뿐이거나 score·margin이 임계값 미만이면 공통 접수 큐로 보낸다.
+- embedding 또는 Qdrant 실패는 HTTP 500, Cross-Encoder 실패는 `COMMON_QUEUE` 정상 응답으로 처리한다.
+- `routing_score_threshold`, `routing_margin_threshold`는 환경변수로 조정한다.
+- 부서 R&R 및 승인 사례 인덱싱은 이슈 #13, 데이터 유형별 마스킹은 이슈 #31 범위다.
+- 상세 API와 데이터 계약은 `docs/domain-guides/ticket-routing-ai.md`를 정본으로 사용한다.
+
 ---
 
 ## 9. 마이그레이션 / 데이터 초기화
