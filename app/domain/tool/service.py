@@ -1,7 +1,7 @@
 from app.common.exceptions import ToolValidationError
 from app.domain.rag.schemas import RagResult, RagStatus
 from app.domain.tool.client import ToolClient
-from app.domain.tool.result_chain import ToolResultChain
+from app.domain.tool.chain import ToolResultChain
 from app.domain.tool.selector import ToolSelector
 from app.domain.tool.validator import InputValidator
 

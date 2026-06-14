@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     google_api_key: str = ""
     anthropic_api_key: str = ""
 
+    # 티켓 부서 라우팅 임계값 (환경변수로 재배포 없이 조정 가능)
+    routing_score_threshold: float = 0.0
+    routing_margin_threshold: float = 0.5
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 
@@ -104,6 +108,14 @@ RERANKER_MODEL = "bongsoo/kpf-cross-encoder-v1"
 # 1위 점수가 0.0 미만이면 근거가 부족하다고 보고 답변을 생성하지 않고 NO_RESULT를 반환한다.
 # 현재 0.0은 평가셋 확보 전 임시 기준이며, 실제 질문/문서 평가 결과에 따라 조정해야 한다.
 RERANK_SCORE_THRESHOLD = 0.0
+
+# ---------------------------------------------------------------------------
+# 티켓 부서 라우팅 파라미터
+# ---------------------------------------------------------------------------
+ROUTING_RETRIEVAL_TOP_K = 20
+ROUTING_RERANK_TOP_K = 3
+ROUTING_DEPT_RR_COLLECTION = "routing_dept_rr"
+ROUTING_CASES_COLLECTION = "routing_cases"
 
 # ---------------------------------------------------------------------------
 # 폴백 단계별 timeout (초)

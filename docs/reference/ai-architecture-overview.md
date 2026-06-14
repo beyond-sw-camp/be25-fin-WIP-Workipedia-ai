@@ -1,7 +1,7 @@
 # Workipedia AI Architecture Overview
 
 > 상태: Draft  
-> 최종 수정: 2026-06-12
+> 최종 수정: 2026-06-14
 
 ## 핵심 원칙
 
@@ -93,7 +93,7 @@ API Layer
    ├─ ChatbotService
    ├─ ManualKnowledgeIndexer
    ├─ ToolSelector
-   ├─ DepartmentRoutingService
+   ├─ TicketRoutingService
    ├─ CrossEncoderReranker
    └─ EmbeddingProvider
 ```
@@ -101,6 +101,8 @@ API Layer
 `POST /api/v1/chat`은 세션 저장 API가 아니라 질문 한 건을 처리하는 AI 내부 추론 endpoint다. BE가 세션·메시지를 저장하고 AI 응답의 `answer`, `sources`, `route`, `action`을 외부 챗봇 API 계약으로 변환한다.
 
 출처는 `candidate_id`, `source_type`, `source_id`, `title`, reranker `score`, 선택적 `link`를 포함한다. `source_type`과 `source_id`는 Qdrant metadata를 우선하고 `candidate_id` 파싱은 fallback으로만 사용한다.
+
+`POST /api/v1/tickets/routing`은 티켓 제목과 내용을 부서 R&R 및 승인 처리 사례와 비교해 부서 후보를 반환하는 AI 내부 endpoint다. 같은 embedding으로 `routing_dept_rr`와 `routing_cases`를 검색하고, 부서별 context를 Cross-Encoder로 reranking한 뒤 AI가 `AUTO_ASSIGNED` 또는 `COMMON_QUEUE`를 결정한다. 상세 계약은 `docs/domain-guides/ticket-routing-ai.md`를 정본으로 사용한다.
 
 ## Provider 구현
 
@@ -137,6 +139,7 @@ EmbeddingProvider
 - 폴백 오케스트레이션
 - 관리자 작성 부서 R&R과 승인된 처리 사례 기반 후보 검색
 - Cross-Encoder 기반 문서 및 부서 후보 reranking
+- 티켓 라우팅의 top score와 1·2위 score margin 기반 decision 산출
 - 처리 완료·승인 티켓 사례의 Vector Store 동기화
 - 민감정보 탐지/마스킹
 

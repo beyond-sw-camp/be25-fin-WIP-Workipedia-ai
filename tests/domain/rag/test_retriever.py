@@ -100,3 +100,51 @@ def test_search_wraps_qdrant_exception_as_provider_error(retriever):
             retriever.search("질문", "manual_chunks")
 
     assert exc_info.value.provider == "qdrant"
+
+
+def test_search_by_embedding_returns_rag_candidates(retriever):
+    embedding = [0.1] * 768
+    mock_result = _mock_query_result(
+        ids=["ROUTING_RR:1:0"],
+        documents=["개발1팀은 ERP를 담당한다"],
+        scores=[0.92],
+        metadatas=[{"department_id": 1, "department_name": "개발1팀", "type": "rr"}],
+    )
+
+    with patch("app.domain.rag.retriever.qdrant_store") as mock_store:
+        mock_store.query.return_value = mock_result
+        result = retriever.search_by_embedding(embedding, "routing_dept_rr", top_k=20)
+
+    assert len(result) == 1
+    assert result[0].candidate_id == "ROUTING_RR:1:0"
+    assert result[0].score == pytest.approx(0.92)
+    assert result[0].metadata["department_id"] == 1
+
+
+def test_search_by_embedding_top_k_zero_returns_empty(retriever):
+    result = retriever.search_by_embedding([0.1] * 768, "routing_dept_rr", top_k=0)
+    assert result == []
+
+
+def test_search_by_embedding_wraps_qdrant_error(retriever):
+    with patch("app.domain.rag.retriever.qdrant_store") as mock_store:
+        mock_store.query.side_effect = Exception("connection refused")
+        with pytest.raises(ProviderError) as exc_info:
+            retriever.search_by_embedding([0.1] * 768, "routing_dept_rr")
+
+    assert exc_info.value.provider == "qdrant"
+
+
+def test_search_delegates_to_search_by_embedding(retriever):
+    mock_embeddings = MagicMock()
+    mock_embeddings.embed_query.return_value = [0.1] * 768
+    mock_result = _mock_query_result(ids=[], documents=[], scores=[])
+
+    with (
+        patch("app.domain.rag.retriever.get_embeddings", return_value=mock_embeddings),
+        patch("app.domain.rag.retriever.qdrant_store") as mock_store,
+    ):
+        mock_store.query.return_value = mock_result
+        retriever.search("질문", "routing_dept_rr", top_k=10)
+
+    mock_store.query.assert_called_once()
