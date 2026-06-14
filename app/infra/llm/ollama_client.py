@@ -6,7 +6,7 @@ from .base import BaseLLMClient
 
 
 class OllamaClient(BaseLLMClient):
-    def get_model(self, request_timeout: float | None = None) -> BaseChatModel:
+    def get_model(self, request_timeout: float | None = None, max_retries: int | None = None) -> BaseChatModel:
         kwargs = {
             "base_url": settings.ollama_base_url,
             "model": CHAT_MODEL_MAP["local"],

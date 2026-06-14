@@ -1,6 +1,6 @@
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.common.exceptions import ProviderError
+from app.common.exceptions import provider_call
 from app.core.config import settings
 from app.domain.chatbot.schemas import SessionMessage
 from app.infra.llm.factory import get_llm
@@ -39,8 +39,11 @@ def contextualize(question: str, context: list[SessionMessage]) -> str:
         SystemMessage(content=_SYSTEM_PROMPT),
         HumanMessage(content=f"[대화 기록]\n{_build_history(context)}\n\n[현재 질문]\n{question}"),
     ]
-    # ProviderError는 호출자에게 전파한다
-    response = get_llm(request_timeout=settings.contextualize_llm_timeout).invoke(messages)
+    with provider_call("llm"):
+        response = get_llm(
+            request_timeout=settings.contextualize_llm_timeout,
+            max_retries=0,
+        ).invoke(messages)
 
     raw = response.content
     if isinstance(raw, list):

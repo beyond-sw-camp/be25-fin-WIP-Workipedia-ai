@@ -9,10 +9,10 @@ _MAX_RETRIES = 2
 
 
 class OpenAIClient(BaseLLMClient):
-    def get_model(self, request_timeout: float | None = None) -> BaseChatModel:
+    def get_model(self, request_timeout: float | None = None, max_retries: int | None = None) -> BaseChatModel:
         return ChatOpenAI(
             api_key=settings.openai_api_key,
             model=CHAT_MODEL_MAP["openai"],
             timeout=request_timeout if request_timeout is not None else _TIMEOUT,
-            max_retries=_MAX_RETRIES,
+            max_retries=max_retries if max_retries is not None else _MAX_RETRIES,
         )

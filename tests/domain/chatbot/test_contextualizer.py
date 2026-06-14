@@ -73,4 +73,4 @@ def test_contextualize_calls_get_llm_with_timeout():
     with patch("app.domain.chatbot.contextualizer.get_llm") as mock_get_llm:
         mock_get_llm.return_value.invoke.return_value = mock_response
         contextualize("며칠 전에?", [_msg(1, "USER", "연차 어떻게?")])
-    mock_get_llm.assert_called_once_with(request_timeout=settings.contextualize_llm_timeout)
+    mock_get_llm.assert_called_once_with(request_timeout=settings.contextualize_llm_timeout, max_retries=0)
