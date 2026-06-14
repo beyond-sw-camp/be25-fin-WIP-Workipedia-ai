@@ -6,20 +6,15 @@ from app.infra.vector_store.qdrant_store import qdrant_store
 
 
 class RagRetriever:
-    def search(
+    def search_by_embedding(
         self,
-        query: str,
+        embedding: list[float],
         collection_name: str,
         top_k: int = RETRIEVAL_TOP_K,
     ) -> list[RagCandidate]:
         if top_k <= 0:
             return []
 
-        # 질문 텍스트를 벡터로 변환. 실패 시 ProviderError("embedding") 발생
-        with provider_call("embedding"):
-            embedding = get_embeddings().embed_query(query)
-
-        # 변환된 벡터로 Qdrant에서 유사 문서 top_k개 조회. 미존재 collection은 자동 생성하지 않음
         with provider_call("qdrant"):
             result = qdrant_store.query(
                 query_embedding=embedding,
@@ -38,6 +33,20 @@ class RagRetriever:
                 result.ids, result.documents, result.distances, result.metadatas
             )
         ]
+
+    def search(
+        self,
+        query: str,
+        collection_name: str,
+        top_k: int = RETRIEVAL_TOP_K,
+    ) -> list[RagCandidate]:
+        if top_k <= 0:
+            return []
+
+        with provider_call("embedding"):
+            embedding = get_embeddings().embed_query(query)
+
+        return self.search_by_embedding(embedding, collection_name, top_k)
 
 
 rag_retriever = RagRetriever()
