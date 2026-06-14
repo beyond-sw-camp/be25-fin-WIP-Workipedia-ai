@@ -485,6 +485,7 @@ WebSocket/STOMP:
 ### 8.8 티켓 부서 라우팅
 
 - AI 내부 API는 `POST /api/v1/tickets/routing`이다.
+- 부서 R&R과 승인 사례의 단건 동기화·삭제 API는 `POST /api/v1/knowledge/sync`, `DELETE /api/v1/knowledge/{source_id}?sourceType=...`이다.
 - 요청은 `title`, `content`, 선택적 `sourceChatbotMessageId`를 받는다.
 - BE 연동 JSON은 camelCase이며 AI 내부 Pydantic 필드는 alias 설정을 통해 snake_case로 관리한다.
 - 질의 embedding은 한 번 생성하고 `routing_dept_rr`, `routing_cases` 두 collection 검색에 재사용한다.
@@ -494,7 +495,12 @@ WebSocket/STOMP:
 - 후보 부서가 하나뿐이거나 score·margin이 임계값 미만이면 공통 접수 큐로 보낸다.
 - embedding 또는 Qdrant 실패는 HTTP 500, Cross-Encoder 실패는 `COMMON_QUEUE` 정상 응답으로 처리한다.
 - `routing_score_threshold`, `routing_margin_threshold`는 환경변수로 조정한다.
-- 부서 R&R 및 승인 사례 인덱싱은 이슈 #13, 데이터 유형별 마스킹은 이슈 #31 범위다.
+- `DEPT_RR`은 부서 ID, `ROUTING_CASE`는 승인 사례 고유 ID를 source ID로 사용한다.
+- 라우팅 지식은 `title + "\n" + content`를 임베딩하고 `{sourceType}:{sourceId}:0` 단일 논리 chunk ID로 선행 삭제 없이 upsert한다.
+- 동기화 payload는 `department_id`, `department_name`, `type`을 포함하며 라우팅 검색의 부서 그룹화에 직접 사용한다.
+- 동일 source의 작업 순서와 오래된 재시도 무효화는 BE #84 `ai_sync_jobs`가 담당한다.
+- embedding·Qdrant 실패는 HTTP 500, 없는 데이터 삭제는 `deletedChunks: 0` 정상 응답으로 처리한다.
+- 부서 R&R 및 승인 사례 인덱싱은 이슈 #13, 데이터 유형별 마스킹은 이슈 #31 범위다. 마스킹 적용 전에는 BE가 개인정보 없는 라우팅 지식만 전달하며 로컬·클라우드 embedding provider를 모두 허용한다.
 - 상세 API와 데이터 계약은 `docs/domain-guides/ticket-routing-ai.md`를 정본으로 사용한다.
 
 ---
