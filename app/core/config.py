@@ -116,6 +116,16 @@ ROUTING_RETRIEVAL_TOP_K = 20
 ROUTING_RERANK_TOP_K = 3
 ROUTING_DEPT_RR_COLLECTION = "routing_dept_rr"
 ROUTING_CASES_COLLECTION = "routing_cases"
+KNOWLEDGE_SYNC_CONFIG: dict[str, dict[str, str]] = {
+    "DEPT_RR": {
+        "collection": ROUTING_DEPT_RR_COLLECTION,
+        "type": "rr",
+    },
+    "ROUTING_CASE": {
+        "collection": ROUTING_CASES_COLLECTION,
+        "type": "case",
+    },
+}
 
 # ---------------------------------------------------------------------------
 # 폴백 단계별 timeout (초)
