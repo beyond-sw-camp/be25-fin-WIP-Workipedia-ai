@@ -76,12 +76,15 @@ class TicketRoutingService:
         with provider_call("embedding"):
             embedding = get_embeddings().embed_query(query)
 
-        rr_results = rag_retriever.search_by_embedding(
-            embedding, ROUTING_DEPT_RR_COLLECTION, ROUTING_RETRIEVAL_TOP_K
-        )
-        case_results = rag_retriever.search_by_embedding(
-            embedding, ROUTING_CASES_COLLECTION, ROUTING_RETRIEVAL_TOP_K
-        )
+        try:
+            rr_results = rag_retriever.search_by_embedding(
+                embedding, ROUTING_DEPT_RR_COLLECTION, ROUTING_RETRIEVAL_TOP_K
+            )
+            case_results = rag_retriever.search_by_embedding(
+                embedding, ROUTING_CASES_COLLECTION, ROUTING_RETRIEVAL_TOP_K
+            )
+        except ProviderError:
+            return _common_queue(["라우팅 데이터 검색 중 오류가 발생해 공통 접수 큐로 이동합니다."], [])
 
         groups = _group_by_dept(rr_results + case_results)
         if not groups:
