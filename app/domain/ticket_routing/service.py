@@ -61,10 +61,10 @@ def _group_by_dept(candidates: list[RagCandidate]) -> dict[int, _DeptGroup]:
             continue
         if dept_id not in groups:
             groups[dept_id] = _DeptGroup(department_id=dept_id, department_name=dept_name)
-        chunk_type = c.metadata.get("type", "")
+        chunk_type = c.metadata.get("type")
         if chunk_type == "rr":
             groups[dept_id].rr_chunks.append(c)
-        else:
+        elif chunk_type == "case":
             groups[dept_id].case_chunks.append(c)
     return groups
 

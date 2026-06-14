@@ -12,7 +12,7 @@ router = APIRouter(prefix="/tickets", tags=["ticket-routing"])
 
 
 @router.post("/routing", response_model=TicketRoutingResponse, response_model_by_alias=True)
-async def recommend_routing(request: TicketRoutingRequest) -> TicketRoutingResponse:
+def recommend_routing(request: TicketRoutingRequest) -> TicketRoutingResponse:
     try:
         return ticket_routing_service.recommend(request)
     except ProviderError as e:
