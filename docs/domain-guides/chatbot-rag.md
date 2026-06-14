@@ -4,8 +4,8 @@
 > 상태: Draft
 > 정본 위치: `docs/domain-guides/chatbot-rag.md`
 > 관련 문서: `docs/adr/rag-strategy.md`, `docs/adr/local-llm-security-strategy.md`, `docs/reference/ai-architecture-overview.md`
-> 버전: v0.9
-> 최종 수정: 2026-06-14
+> 버전: v0.10
+> 최종 수정: 2026-06-15
 
 ## 개발 목표
 
@@ -442,6 +442,7 @@ class SourceItem(BaseModel):
     candidate_id: str
     source_type: str
     source_id: str
+    chunk_index: int | None = None
     title: str
     score: float
     link: str | None = None
@@ -459,7 +460,8 @@ class ChatResponse(BaseModel):
 - `senderType=SYSTEM`, 공백 질문, 공백 메시지 내용은 `422`다.
 - `customPrompt`는 일반 사용자가 직접 작성하는 값이 아니라 신뢰된 BE가 활성 SYSTEM_ADMIN 설정을 전달하는 내부 계약이다.
 - 실제 검색에 전달하지 않는 `top_k`도 요청에서 받지 않는다.
-- 출처의 `source_type`, `source_id`는 Qdrant metadata를 정본으로 사용하고 `candidate_id` 파싱은 fallback으로만 사용한다.
+- 출처의 `source_type`, `source_id`, `chunk_index`는 Qdrant metadata를 정본으로 사용하고 `candidate_id` 파싱은 fallback으로만 사용한다. metadata 값이 변환 불가이거나 음수이면 `candidate_id` 파싱으로 재시도하고, 둘 다 실패하면 `null`을 반환한다.
+- AI는 인용된 chunk 식별 정보만 반환한다. `manual_citations` 저장, 답변 단위 중복 방지와 FAQ 인기 매뉴얼 캐시 무효화는 BE가 담당한다.
 - 출처 식별값이 없으면 빈 출처를 반환하지 않고 오류로 처리한다.
 - `BLOCKED`는 고정 안전 응답, `NO_RESULT + CREATE_TICKET`은 티켓 전환 안내를 반환한다.
 - `ERROR`는 근거 없음으로 위장하지 않고 일시적 오류와 재시도를 안내하는 별도 응답으로 변환한다.
@@ -485,6 +487,7 @@ class ChatResponse(BaseModel):
 - `RagChain`, 구조화 답변 스키마, 기본/custom prompt, 인용 검증과 관련 단위 테스트가 구현되어 있다.
 - LLM 파싱 실패 1회 재시도와 provider 오류의 즉시 `ERROR` 변환이 구현되어 있다.
 - `RagOrchestrator`, `ChatbotService`, `/api/v1/chat` 연결과 endpoint 상태 변환이 구현되어 있다.
+- `SourceItem.chunk_index` 응답과 Qdrant metadata 우선·`candidate_id` fallback 변환이 구현되어 BE의 매뉴얼 인용 이력 저장과 연동할 수 있다.
 - 세션 컨텍스트 요청 계약, history-aware retrieval query 분리와 contextualize timeout 설계가 확정되어 구현 중이다.
 - D단계 Tool Calling 설계와 구현 계획은 `docs/domain-guides/tool-integration.md`에 통합되어 있다. Tool domain 컴포넌트는 구현 중이며 `ToolCallingStep` 연결과 BE HTTP adapter는 남아 있다.
 - 실제 Qdrant 통합 테스트, `doc_id` payload index, scroll pagination은 남아 있다.

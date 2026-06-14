@@ -13,16 +13,22 @@ from app.domain.rag.schemas import (
 
 def _make_ref(cid: str, title: str = "문서", score: float = 1.0) -> RerankedCandidate:
     parts = cid.split(":", 2)
+    meta = {
+        "source_type": parts[0] if len(parts) > 1 else "",
+        "source_id": parts[1] if len(parts) > 1 else "",
+        "title": title,
+    }
+    if len(parts) == 3:
+        try:
+            meta["chunk_index"] = int(parts[2])
+        except (ValueError, TypeError):
+            pass
     return RerankedCandidate(
         candidate_id=cid,
         text="내용",
         score=score,
         rank=1,
-        metadata={
-            "source_type": parts[0] if len(parts) > 1 else "",
-            "source_id": parts[1] if len(parts) > 1 else "",
-            "title": title,
-        },
+        metadata=meta,
     )
 
 
@@ -56,6 +62,7 @@ def test_chat_success_response(client):
     assert len(data["sources"]) == 1
     assert data["sources"][0]["source_type"] == "MANUAL"
     assert data["sources"][0]["source_id"] == "42"
+    assert data["sources"][0]["chunk_index"] == 0
     assert data["sources"][0]["title"] == "휴가 규정"
     assert data["action"] is None
 
@@ -153,3 +160,96 @@ def test_chat_blank_session_content_rejected(client):
         "sessionContext": [{"messageId": 1, "senderType": "USER", "content": "   "}]
     })
     assert response.status_code == 422
+
+
+def test_chat_source_chunk_index_metadata_takes_priority(client):
+    """metadata chunk_index가 candidate_id 파싱값보다 우선한다."""
+    ref = RerankedCandidate(
+        candidate_id="MANUAL:42:9",   # candidate_id에서 파싱하면 9
+        text="내용",
+        score=1.0,
+        rank=1,
+        metadata={
+            "source_type": "MANUAL",
+            "source_id": "42",
+            "chunk_index": 0,          # metadata 값은 0
+            "title": "휴가 규정",
+        },
+    )
+    answer = GeneratedAnswer(answer="답변", references=[ref])
+    orch_result = OrchestratorResult(status=RagStatus.SUCCESS, answer=answer, route="A")
+
+    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.masker") as mock_masker:
+        mock_masker.mask.side_effect = lambda x: x
+        mock_orch.run = AsyncMock(return_value=orch_result)
+        response = client.post("/api/v1/chat", json={"question": "질문"})
+
+    assert response.status_code == 200
+    assert response.json()["sources"][0]["chunk_index"] == 0  # metadata 값 우선
+
+
+def test_chat_source_chunk_index_from_candidate_id_fallback(client):
+    """metadata에 chunk_index가 없으면 candidate_id 파싱으로 fallback한다."""
+    ref = RerankedCandidate(
+        candidate_id="MANUAL:7:3",
+        text="내용",
+        score=1.0,
+        rank=1,
+        metadata={"source_type": "MANUAL", "source_id": "7", "title": "매뉴얼"},
+    )
+    answer = GeneratedAnswer(answer="답변", references=[ref])
+    orch_result = OrchestratorResult(status=RagStatus.SUCCESS, answer=answer, route="A")
+
+    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.masker") as mock_masker:
+        mock_masker.mask.side_effect = lambda x: x
+        mock_orch.run = AsyncMock(return_value=orch_result)
+        response = client.post("/api/v1/chat", json={"question": "질문"})
+
+    assert response.status_code == 200
+    assert response.json()["sources"][0]["chunk_index"] == 3
+
+
+def test_chat_source_chunk_index_invalid_metadata_falls_back_to_candidate_id(client):
+    """metadata chunk_index가 변환 불가이면 candidate_id 파싱으로 fallback한다."""
+    ref = RerankedCandidate(
+        candidate_id="MANUAL:7:5",
+        text="내용",
+        score=1.0,
+        rank=1,
+        metadata={"source_type": "MANUAL", "source_id": "7", "chunk_index": "invalid", "title": "매뉴얼"},
+    )
+    answer = GeneratedAnswer(answer="답변", references=[ref])
+    orch_result = OrchestratorResult(status=RagStatus.SUCCESS, answer=answer, route="A")
+
+    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.masker") as mock_masker:
+        mock_masker.mask.side_effect = lambda x: x
+        mock_orch.run = AsyncMock(return_value=orch_result)
+        response = client.post("/api/v1/chat", json={"question": "질문"})
+
+    assert response.status_code == 200
+    assert response.json()["sources"][0]["chunk_index"] == 5
+
+
+def test_chat_source_chunk_index_none_when_not_parseable(client):
+    """chunk_index가 metadata와 candidate_id 모두에 없으면 null을 반환한다."""
+    ref = RerankedCandidate(
+        candidate_id="MANUAL:5",
+        text="내용",
+        score=1.0,
+        rank=1,
+        metadata={"source_type": "MANUAL", "source_id": "5", "title": "제목"},
+    )
+    answer = GeneratedAnswer(answer="답변", references=[ref])
+    orch_result = OrchestratorResult(status=RagStatus.SUCCESS, answer=answer, route="A")
+
+    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.masker") as mock_masker:
+        mock_masker.mask.side_effect = lambda x: x
+        mock_orch.run = AsyncMock(return_value=orch_result)
+        response = client.post("/api/v1/chat", json={"question": "질문"})
+
+    assert response.status_code == 200
+    assert response.json()["sources"][0]["chunk_index"] is None

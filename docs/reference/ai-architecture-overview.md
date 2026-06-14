@@ -1,7 +1,7 @@
 # Workipedia AI Architecture Overview
 
 > 상태: Draft  
-> 최종 수정: 2026-06-14
+> 최종 수정: 2026-06-15
 
 ## 핵심 원칙
 
@@ -100,7 +100,7 @@ API Layer
 
 `POST /api/v1/chat`은 세션 저장 API가 아니라 질문 한 건을 처리하는 AI 내부 추론 endpoint다. BE가 세션·메시지를 저장하고 AI 응답의 `answer`, `sources`, `route`, `action`을 외부 챗봇 API 계약으로 변환한다.
 
-출처는 `candidate_id`, `source_type`, `source_id`, `title`, reranker `score`, 선택적 `link`를 포함한다. `source_type`과 `source_id`는 Qdrant metadata를 우선하고 `candidate_id` 파싱은 fallback으로만 사용한다.
+출처는 `candidate_id`, `source_type`, `source_id`, `chunk_index`(nullable), `title`, reranker `score`, 선택적 `link`를 포함한다. `source_type`, `source_id`, `chunk_index`는 Qdrant metadata를 우선하고 `candidate_id` 파싱은 fallback으로만 사용한다. `chunk_index`는 BE가 `manual_chunks`에서 `manual_chunk_id`를 조회하는 데 사용한다. AI는 chunk 식별 정보까지만 제공하며 인용 이력 저장, 중복 방지와 FAQ 캐시 무효화는 BE 책임이다.
 
 `POST /api/v1/tickets/routing`은 티켓 제목과 내용을 부서 R&R 및 승인 처리 사례와 비교해 부서 후보를 반환하는 AI 내부 endpoint다. 같은 embedding으로 `routing_dept_rr`와 `routing_cases`를 검색하고, 부서별 context를 Cross-Encoder로 reranking한 뒤 AI가 `AUTO_ASSIGNED` 또는 `COMMON_QUEUE`를 결정한다. 상세 계약은 `docs/domain-guides/ticket-routing-ai.md`를 정본으로 사용한다.
 

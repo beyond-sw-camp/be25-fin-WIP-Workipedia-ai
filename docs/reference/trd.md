@@ -4,8 +4,8 @@
 > 상태: Draft
 > 정본 위치: `docs/reference/trd.md`
 > 관련 문서: `docs/reference/service-flow.md`, `docs/reference/prd.md`, `docs/reference/ai-architecture-overview.md`
-> 버전: v0.6
-> 최종 수정: 2026-06-12
+> 버전: v0.7
+> 최종 수정: 2026-06-15
 
 ---
 
@@ -484,7 +484,8 @@ WebSocket/STOMP:
 - 질문은 최대 2,000자, 세션 메시지와 custom prompt는 각각 최대 4,000자로 제한한다.
 - contextualize provider HTTP timeout은 기본 25초, outer timeout은 30초다.
 - 일반 사용자에게 `customPrompt`와 미사용 `top_k`를 직접 노출하지 않는다.
-- 성공 응답 출처는 `candidate_id`, `source_type`, `source_id`, `title`, `score`, 선택적 `link`를 포함한다.
+- 성공 응답 출처는 `candidate_id`, `source_type`, `source_id`, `chunk_index`(nullable), `title`, `score`, 선택적 `link`를 포함한다. `chunk_index`는 BE가 `manual_chunks` 테이블에서 `(manual_id, chunk_index)`로 `manual_chunk_id`를 조회할 때 사용한다.
+- AI는 출처 식별 계약까지만 제공하고, `manual_citations` 저장·답변 단위 중복 방지·FAQ 인기 매뉴얼 캐시 무효화는 BE가 처리한다.
 - 응답은 단계별 `stepHistory`를 포함하며 contextualize fallback도 이력에서 확인할 수 있다.
 - `BLOCKED`, `NO_RESULT + CREATE_TICKET`, `ERROR`는 각각 안전 응답, 티켓 전환 안내, 일시적 오류 안내로 구분한다.
 - endpoint 테스트는 `SUCCESS`, `BLOCKED`, `CREATE_TICKET`, `ERROR`, 빈 질문 `422`를 포함한다.
