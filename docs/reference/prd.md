@@ -4,8 +4,8 @@
 > 상태: Draft
 > 정본 위치: `docs/reference/prd.md`
 > 관련 문서: `docs/reference/service-flow.md`, `docs/reference/trd.md`, `docs/reference/ai-architecture-overview.md`
-> 버전: v0.3
-> 최종 수정: 2026-06-08
+> 버전: v0.4
+> 최종 수정: 2026-06-15
 
 ---
 
@@ -272,6 +272,110 @@ Workipedia는 사내 구성원이 회사 규정·매뉴얼·동료의 경험 지
 > 질문은 기존 지식을 소비하는 흐름이고, 요청은 새로운 지식을 만들어내는 흐름이다.
 
 > 모든 챗봇 답변은 매뉴얼과 워키 출처를 기반으로 하며, 근거가 부족한 경우 요청 티켓으로 전환해 담당 부서의 공식 처리를 받는다.
+
+---
+
+---
+
+## 11. AI 서버 요구사항
+
+> AI 서버(Workipedia-ai)가 구현해야 하는 기능 요구사항이다. BE는 API 계약에 따라 AI 서버를 호출하며, AI 서버는 LLM·Embedding·Vector Store를 직접 다룬다.
+
+### 11.1 문서 파싱 및 인덱싱
+
+| ID | 요구사항 | 우선순위 |
+|---|---|---|
+| AI_IDX_001 | PDF·DOCX·TXT 파일을 파싱하여 텍스트를 추출한다 | 상 |
+| AI_IDX_002 | 추출된 텍스트를 source_type별 청킹 설정으로 분할한다 | 상 |
+| AI_IDX_003 | 청킹 전 민감정보 마스킹을 수행하고, 마스킹 실패 시 인덱싱을 거부한다 | 상 |
+| AI_IDX_004 | 청크를 임베딩하여 Qdrant에 upsert한다 (논리 ID 기반 멱등 처리) | 상 |
+| AI_IDX_005 | 재인덱싱 시 임베딩 성공 후 기존 청크를 교체하여 실패 시 기존 데이터를 보존한다 | 상 |
+| AI_IDX_006 | source_id 기준으로 해당 문서의 모든 청크를 삭제한다 | 상 |
+| AI_IDX_007 | 지원 source_type: MANUAL, WORKI, KNOWLEDGE_DATA, MANUAL_KNOWLEDGE, DEPT_RR, ROUTING_CASE | 상 |
+
+### 11.2 챗봇 RAG 응답 생성
+
+| ID | 요구사항 | 우선순위 |
+|---|---|---|
+| AI_RAG_001 | 질문을 임베딩하여 매뉴얼·워키·지식 collection을 검색한다 | 상 |
+| AI_RAG_002 | Vector Search 후보를 Cross-Encoder로 재정렬한다 | 상 |
+| AI_RAG_003 | 폴백 순서: 매뉴얼 RAG → 워키 RAG → 지식 RAG → Tool Calling | 상 |
+| AI_RAG_004 | 각 단계 결과는 SUCCESS / NO_RESULT / ERROR / BLOCKED으로 구분하며, SUCCESS 즉시 반환한다 | 상 |
+| AI_RAG_005 | 출처 없는 답변과 검색 근거 밖의 답변 생성을 허용하지 않는다 | 상 |
+| AI_RAG_006 | 응답에 답변 근거 청크(source_type, source_id, chunk_index, 제목)를 포함한다 | 상 |
+| AI_RAG_007 | 민감정보가 포함된 질문은 BLOCKED 처리하고 답변을 거부한다 | 상 |
+| AI_RAG_008 | 대화 세션 컨텍스트를 기반으로 검색 쿼리를 재구성한다 (history-aware retrieval) | 중 |
+| AI_RAG_009 | SYSTEM_ADMIN이 설정한 custom_prompt가 활성화된 경우 base_prompt에 추가한다 | 중 |
+
+### 11.3 Tool Calling
+
+| ID | 요구사항 | 우선순위 |
+|---|---|---|
+| AI_TOOL_001 | LLM이 활성화된 Tool 목록에서 적합한 Tool과 입력 인자를 선택한다 | 중 |
+| AI_TOOL_002 | LLM이 선택한 입력 인자를 Tool의 JSON Schema로 검증한다 | 중 |
+| AI_TOOL_003 | BE가 실제 HTTP/DB 실행을 담당하며, AI 서버는 Tool 선택과 결과 해석만 수행한다 | 중 |
+| AI_TOOL_004 | Tool 실행 결과에 민감정보 마스킹을 적용한 후 LLM에 전달한다 | 중 |
+| AI_TOOL_005 | LLM이 SQL을 생성하거나 수정하지 않는다 | 중 |
+
+### 11.4 티켓 부서 라우팅 추천
+
+| ID | 요구사항 | 우선순위 |
+|---|---|---|
+| AI_ROUTE_001 | 티켓 제목·내용을 임베딩하여 부서 R&R과 승인 사례 collection을 검색한다 | 상 |
+| AI_ROUTE_002 | 검색 결과를 부서 단위로 집계하고 Cross-Encoder로 재정렬한다 | 상 |
+| AI_ROUTE_003 | 응답에 후보 부서 Top 3, top_score, score_margin, model, provider를 포함한다 | 상 |
+| AI_ROUTE_004 | 자동 배정·공통 큐 판단 임계값 적용은 BE가 담당한다 | 상 |
+| AI_ROUTE_005 | 부서 R&R·사례 데이터가 없으면 COMMON_QUEUE 응답을 반환한다 | 상 |
+
+### 11.5 부서 R&R 라우팅 프롬프트 생성
+
+| ID | 요구사항 | 우선순위 |
+|---|---|---|
+| AI_DEPT_001 | SYSTEM_ADMIN의 자연어 instruction을 받아 변경이 필요한 부서의 R&R 텍스트를 생성한다 | 상 |
+| AI_DEPT_002 | 변경이 필요한 부서만 응답에 포함하며, 응답에 없는 부서는 BE가 변경하지 않는다 | 상 |
+| AI_DEPT_003 | 문자열을 단순히 이어 붙이지 않고 LLM이 최종 역할 설명을 생성한다 | 상 |
+| AI_DEPT_004 | LLM 호출 실패 시 임시값 반환 없이 명시적 오류를 반환한다 | 상 |
+| AI_DEPT_005 | 응답 R&R 텍스트에 민감정보 마스킹을 적용한다 | 상 |
+
+### 11.6 지식 동기화 인덱싱
+
+| ID | 요구사항 | 우선순위 |
+|---|---|---|
+| AI_SYNC_001 | source_type + source_id 기반 deterministic point ID로 upsert하여 멱등성을 보장한다 | 상 |
+| AI_SYNC_002 | 부서 R&R(DEPT_RR)과 라우팅 사례(ROUTING_CASE)는 청킹 없이 1개 point로 저장한다 | 상 |
+| AI_SYNC_003 | 임베딩 실패 시 기존 Vector Store 데이터를 보존한다 | 상 |
+| AI_SYNC_004 | 이미 삭제된 데이터의 삭제 요청은 멱등 성공(deletedChunks: 0)으로 처리한다 | 상 |
+
+### 11.7 민감정보 마스킹
+
+| ID | 요구사항 | 우선순위 |
+|---|---|---|
+| AI_MASK_001 | 주민번호·카드번호는 항상 마스킹한다 | 상 |
+| AI_MASK_002 | 전화번호·이메일은 설정에 따라 선택적으로 마스킹한다 | 상 |
+| AI_MASK_003 | 마스킹은 LLM 호출 전과 Vector Store 저장 전에 수행한다 | 상 |
+| AI_MASK_004 | 마스킹 실패 시 BLOCKED 처리하고 처리를 중단한다 | 상 |
+
+### 11.8 개선 과제 (후순위)
+
+| ID | 항목 | 관련 이슈 | 우선순위 |
+|---|---|---|---|
+| AI_OPT_001 | 클라우드 LLM 호출 실패 시 로컬 Ollama를 최종 fallback으로 사용한다 (openai/google/anthropic → Ollama 순) | AI #24 | 하 |
+| AI_OPT_002 | Qdrant sparse vector(BM25)를 활용한 하이브리드 검색으로 고유명사 쿼리 정확도를 개선한다 | AI #26 | 하 |
+| AI_OPT_003 | chunk_size·overlap·RETRIEVAL_TOP_K·RERANK_TOP_K·RERANK_SCORE_THRESHOLD 하이퍼파라미터를 실험 평가하여 최적값을 선정한다 | AI #28 | 하 |
+| AI_OPT_004 | 문서 인덱싱 파이프라인을 비동기 처리로 전환하여 BE 타임아웃 위험을 제거한다 | AI #21 | 하 |
+| AI_OPT_005 | 스캔 PDF의 텍스트 추출 결과가 비어있는 경우 OCR fallback을 적용한다 | AI #22 | 하 |
+| AI_OPT_006 | 데이터 유형별(매뉴얼·워키·티켓·Tool 결과 등) 마스킹 정책을 분리하여 불필요한 훼손과 개인정보 누출을 동시에 방지한다 | AI #31 | 하 |
+
+### 11.9 비기능 요구사항
+
+| 항목 | 요구사항 |
+|---|---|
+| LLM 추상화 | LOCAL(Ollama) / OpenAI / Google / Anthropic provider를 환경설정으로 전환하며, FALLBACK 모드는 가용 provider를 순서대로 시도한다 |
+| Embedding 추상화 | Ollama / OpenAI / Google Embedding adapter를 환경설정으로 전환한다 |
+| 오류 처리 | LLM·Embedding·Vector Store 오류는 ProviderError로 통일하고, 임시값 반환 없이 명시적 오류를 반환한다 |
+| 고객사 격리 | 고객사마다 서버를 별도 배포하며, 하나의 서버에서 tenant별 provider를 런타임 변경하지 않는다 |
+| 데이터 무결성 | BE RDB를 정본으로 사용하고, Qdrant는 재생성 가능한 검색 인덱스로 취급한다 |
+| 보안 | 민감정보·API key·DB 접속정보를 로그에 기록하지 않는다 |
 
 ---
 
