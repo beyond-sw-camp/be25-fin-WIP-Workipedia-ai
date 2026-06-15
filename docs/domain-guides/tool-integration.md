@@ -218,28 +218,9 @@ AI의 Tool 목록 API에는 `active=true`이면서 `approvalStatus=APPROVED`인 
 - LLM이 생성한 입력 위반: `ToolValidationError` → `BLOCKED`
 - BE가 반환한 잘못된 JSON Schema: `SchemaError` → `ProviderError` → `ERROR`
 
-## 결과 마스킹과 답변 생성
+## 답변 생성과 출력 마스킹
 
-Tool 결과는 중첩된 `dict`와 `list` 구조를 유지하며 모든 문자열 값을 재귀적으로 마스킹한다. 숫자로 반환된 카드번호처럼 문자열 leaf가 아닌 민감정보를 처리하기 위해 JSON 직렬화 후 최종 문자열에도 마스킹을 한 번 더 적용한다.
-
-```python
-def _mask_recursive(value):
-    if isinstance(value, str):
-        return masker.mask(value)
-    if isinstance(value, dict):
-        return {key: _mask_recursive(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_mask_recursive(item) for item in value]
-    return value
-
-
-def _mask_tool_result(data) -> str:
-    masked = _mask_recursive(data)
-    serialized = json.dumps(masked, ensure_ascii=False)
-    return masker.mask(serialized)
-```
-
-마스킹에 실패하면 원본 결과를 LLM에 전달하지 않고 `BLOCKED`를 반환한다.
+Tool 결과는 원문 그대로 JSON 직렬화하여 LLM에 전달한다. LLM이 생성한 최종 답변을 사용자에게 반환하기 전에 `masker.mask()`를 적용한다. 마스킹에 실패하면 `BLOCKED`를 반환한다.
 
 최종 답변 LLM은 다음 구조만 반환한다.
 
@@ -383,7 +364,7 @@ A/B/C 단계의 예상 가능한 오류는 다음 검색 단계로 폴백한다.
 2. Tool domain schema와 `ToolClient` Protocol을 추가한다.
 3. `InputValidator`를 TDD로 구현한다.
 4. Pydantic strict 응답 검증을 사용하는 `ToolSelector`를 구현한다.
-5. 재귀·직렬화 후 이중 마스킹을 사용하는 `ToolResultChain`을 구현한다.
+5. Tool 결과 원문을 LLM에 전달하고 최종 응답에 출력 마스킹을 적용하는 `ToolResultChain`을 구현한다.
 6. Stub, Workipedia HTTP adapter와 factory를 구현한다.
 7. `ToolService`를 구현해 컴포넌트를 조율한다.
 8. `ToolCallingStep` 스텁을 교체하고 D단계 ERROR 정책을 연결한다.
@@ -414,13 +395,12 @@ A/B/C 단계의 예상 가능한 오류는 다음 검색 단계로 폴백한다.
 
 ### `ToolResultChain`
 
-- 마스킹 실패
+- 출력 마스킹 실패 → BLOCKED
 - `INSUFFICIENT_RESULT`
 - 정상 답변과 빈 references
 - JSON 파싱 재시도
 - 두 번 파싱 실패
-- 마스킹된 결과만 LLM에 전달
-- 숫자형 카드번호의 2차 마스킹
+- 답변 반환 전 출력 마스킹 적용
 
 ### `WorkipediaToolClient`
 

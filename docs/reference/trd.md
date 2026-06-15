@@ -65,7 +65,7 @@
    - BE `@Scheduled` 워커가 object storage에서 매뉴얼·워키·수기 지식·승인 지식 파일을 내려받아 AI API로 전달
    - AI API: `POST /api/v1/documents/ingest`, `DELETE /api/v1/documents/{source_id}?source_type=...`
    - 인덱싱 API는 `multipart/form-data`의 `source_id`, `source_type`, `title`, `file`을 수신하고 PDF, DOCX, TXT를 파싱
-   - AI 서버가 source type별 마스킹과 청킹 설정을 적용
+   - AI 서버가 source type별 청킹 설정을 적용
    - Qdrant collection: `manual_chunks`, `worki_chunks`, `knowledge_data_chunks`, `manual_knowledge_chunks`이며, 같은 이름의 BE RDB chunk 테이블과 저장 책임은 별개
    - 논리 chunk ID `{source_type}:{source_id}:{chunk_index}`를 deterministic UUID point ID로 변환
    - 선택된 Embedding provider로 임베딩 생성 → Qdrant에 upsert
@@ -76,8 +76,7 @@
 AI 서버는 RabbitMQ를 직접 구독하지 않는다. BE가 `ai_sync_jobs`를 기준으로 AI HTTP API를 호출한다.
 
 2. **질의 처리(실시간)** — KNOIT_001~003
-   - 사용자 질문 → 민감정보 탐지 및 마스킹(KNOIT_007/008)
-   - 마스킹된 질문 임베딩 → Vector Store 유사도 검색(top-k)
+   - 사용자 질문 임베딩 → Vector Store 유사도 검색(top-k)
    - 검색 후보를 로컬 Cross-Encoder로 재정렬하고 본문, metadata, Qdrant 원본 점수, Cross-Encoder 원본 점수와 rank를 유지
    - 검색된 chunk + 원본 매뉴얼/워키 메타 → LLM 프롬프트 컨텍스트 구성
    - LLM은 `ANSWER` 또는 `INSUFFICIENT_CONTEXT`, 답변, 인용 chunk ID를 JSON으로 반환
@@ -394,7 +393,7 @@ WebSocket/STOMP:
 | 비밀번호 | 8자 이상 영문+숫자 / BCrypt 저장 |
 | 인증 | JWT(짧은 Access + Refresh), HttpOnly 쿠키 또는 헤더 |
 | 권한 검사 | 모든 변경 API에서 USER/TEAM_ADMIN/SYSTEM_ADMIN/부서원 권한 명시 검증 |
-| 개인정보 마스킹 | KNOIT_007 — 주민번호·카드번호는 항상 마스킹하고 WORKI는 전화번호·이메일을 추가 마스킹. 계좌번호는 정책 확정 후 추가 |
+| 개인정보 마스킹 | KNOIT_007 — 사용자에게 반환하는 LLM 응답에만 마스킹 적용. 주민번호·카드번호는 항상, 전화번호·이메일은 설정에 따라 마스킹. BE RDB는 암호화 저장 |
 | 개인정보 답변 거부 | KNOIT_008 — LLM 응답 후처리에 개인정보 유출 검사 |
 | Flash Chat 임시성 | 메시지는 Redis TTL로 삭제하며 영구 DB에 저장하지 않음 |
 | 파일 첨부 | 이미지 MIME/크기 제한, 저장 경로 직접 노출 금지, 고객사별 S3/MinIO adapter 선택 |
@@ -423,7 +422,7 @@ WebSocket/STOMP:
 
 | 의존성 | 사용 목적 | 위험 / 대응 |
 |---|---|---|
-| LLM Provider | RAG 답변 생성 | Local/Ollama, OpenAI, Google, Anthropic, fallback. 민감정보 마스킹 후 호출 |
+| LLM Provider | RAG 답변 생성 | Local/Ollama, OpenAI, Google, Anthropic, fallback. 응답 반환 전 출력 마스킹 적용 |
 | Embedding Provider | 문서·질문 임베딩 | Local(Ollama), OpenAI, Google. provider별 출력 차원 적용 |
 | Cross-Encoder Reranker | 검색 후보 재정렬 | 후보별 `candidate_id`, `text`, `score`, `rank`, `metadata`, `retrieval_score` 반환 |
 | Object Storage | 이미지 첨부 저장 | 고객사별 S3/MinIO 구현체 교체 |
@@ -473,7 +472,7 @@ WebSocket/STOMP:
 ### 8.7 폴백 오케스트레이터와 챗봇 endpoint
 
 - `ManualRagStep`, `WorkiRagStep`, `KnowledgeRagStep`, `ToolCallingStep`을 공통 `StepRunner` 계약으로 구현한다.
-- `ChatbotService`가 최근 세션 컨텍스트 선택, 질문·대화 마스킹, 후속 질문 contextualize를 담당한다.
+- `ChatbotService`가 최근 세션 컨텍스트 선택, 후속 질문 contextualize, LLM 응답 출력 마스킹을 담당한다.
 - `RagOrchestrator`는 답변용 `query`와 검색용 `retrieval_query`를 분리해 A→B→C→D 단계를 순회하고 각 결과를 `StepRecord`에 남긴다.
 - A/B/C 검색·reranking과 D Tool 선택은 `retrieval_query`를 사용하고, 최종 답변 생성은 원본 의미를 보존한 `query`와 세션 기록을 사용한다.
 - contextualize provider 오류나 timeout은 원본 질문으로 fallback하고 `CONTEXT/ERROR`를 기록한다.

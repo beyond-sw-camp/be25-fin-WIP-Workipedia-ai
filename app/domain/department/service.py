@@ -53,6 +53,8 @@ def _parse_llm_response(content: str, targets: list[DepartmentTarget]) -> list[D
         if dept_id not in valid_ids:
             logger.warning("LLM이 요청에 없는 departmentId %s를 반환했습니다. 무시합니다.", dept_id)
             continue
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ProviderError("llm", f"departmentId {dept_id}의 routingPrompt가 비어있거나 올바르지 않습니다.")
         masked_prompt = masker.mask(prompt)
         results.append(DepartmentRoutingResult(department_id=dept_id, routing_prompt=masked_prompt))
     return results

@@ -11,12 +11,6 @@ def service():
     return DocumentService()
 
 
-def _mock_masker(return_text: str) -> MagicMock:
-    m = MagicMock()
-    m.mask.return_value = return_text
-    return m
-
-
 def test_index_returns_chunk_count(service):
     request = DocumentIndexRequest(
         source_id=1,
@@ -25,7 +19,6 @@ def test_index_returns_chunk_count(service):
         text="이것은 테스트 텍스트입니다. " * 20,
     )
     with (
-        patch("app.domain.document.service.masker_for", return_value=_mock_masker(request.text)),
         patch("app.domain.document.service.embed_texts") as mock_embed,
         patch("app.domain.document.service.qdrant_store") as mock_store,
     ):
@@ -50,7 +43,6 @@ def test_index_embed_first_then_delete(service):
     )
     call_order = []
     with (
-        patch("app.domain.document.service.masker_for", return_value=_mock_masker(request.text)),
         patch("app.domain.document.service.embed_texts") as mock_embed,
         patch("app.domain.document.service.qdrant_store") as mock_store,
     ):
@@ -74,7 +66,6 @@ def test_index_preserves_existing_chunks_on_embed_failure(service):
         text="이것은 테스트 텍스트입니다. " * 20,
     )
     with (
-        patch("app.domain.document.service.masker_for", return_value=_mock_masker(request.text)),
         patch("app.domain.document.service.embed_texts") as mock_embed,
         patch("app.domain.document.service.qdrant_store") as mock_store,
     ):
@@ -156,7 +147,6 @@ def test_chunk_config_applied_per_source_type(service):
         text="짧은 게시글 내용입니다. " * 10,
     )
     with (
-        patch("app.domain.document.service.masker_for", return_value=_mock_masker(request.text)),
         patch("app.domain.document.service.chunk_text") as mock_chunk,
         patch("app.domain.document.service.embed_texts") as mock_embed,
         patch("app.domain.document.service.qdrant_store") as mock_store,

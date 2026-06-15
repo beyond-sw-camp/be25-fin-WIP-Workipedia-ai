@@ -29,39 +29,36 @@ class ChatbotService:
         else:
             selected_context = session_context[-max_n:]
 
-        # 2. 마스킹
-        try:
-            masked_question = masker.mask(question)
-            masked_context = [
-                msg.model_copy(update={"content": masker.mask(msg.content)})
-                for msg in selected_context
-            ]
-        except MaskingBlockedError:
-            return OrchestratorResult(status=RagStatus.BLOCKED, step_history=[])
-
-        # 3. Contextualize
+        # 2. Contextualize
         context_record: StepRecord | None = None
-        if max_n == 0 or not masked_context:
-            retrieval_query = masked_question
+        if max_n == 0 or not selected_context:
+            retrieval_query = question
         else:
             try:
                 retrieval_query = await asyncio.wait_for(
-                    asyncio.to_thread(contextualize, masked_question, masked_context),
+                    asyncio.to_thread(contextualize, question, selected_context),
                     timeout=STEP_TIMEOUT["CONTEXT"],
                 )
             except (ProviderError, asyncio.TimeoutError) as exc:
                 msg = exc.message if isinstance(exc, ProviderError) else "timeout"
                 context_record = StepRecord(step="CONTEXT", status=RagStatus.ERROR, error_message=msg)
                 logger.error("contextualize 실패: %s", msg)
-                retrieval_query = masked_question
+                retrieval_query = question
 
-        # 4. Orchestrator
+        # 3. Orchestrator
         result = await rag_orchestrator.run(
-            query=masked_question,
+            query=question,
             retrieval_query=retrieval_query,
             custom_prompt=custom_prompt,
-            session_context=masked_context,
+            session_context=selected_context,
         )
+
+        # 4. 출력 마스킹
+        if result.answer is not None:
+            try:
+                result.answer.answer = masker.mask(result.answer.answer)
+            except MaskingBlockedError:
+                return OrchestratorResult(status=RagStatus.BLOCKED, step_history=result.step_history)
 
         # 5. CONTEXT 오류 기록 병합
         if context_record is not None:

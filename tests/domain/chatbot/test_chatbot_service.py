@@ -107,11 +107,18 @@ async def test_ask_masks_and_contextualizes():
 async def test_ask_masking_blocked_returns_blocked():
     from app.domain.chatbot.service import ChatbotService
     from app.common.exceptions import MaskingBlockedError
+    from app.domain.rag.schemas import GeneratedAnswer
     svc = ChatbotService()
 
-    with patch("app.domain.chatbot.service.masker") as mock_masker:
+    answer_mock = MagicMock(spec=GeneratedAnswer)
+    answer_mock.answer = "노출될 수 있는 응답"
+    orch_result = OrchestratorResult(status=RagStatus.SUCCESS, answer=answer_mock, step_history=[])
+
+    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.masker") as mock_masker:
+        mock_orch.run = AsyncMock(return_value=orch_result)
         mock_masker.mask.side_effect = MaskingBlockedError()
-        result = await svc.ask("주민번호 노출 질문", custom_prompt=None, session_context=[])
+        result = await svc.ask("질문", custom_prompt=None, session_context=[])
 
     assert result.status == RagStatus.BLOCKED
 
