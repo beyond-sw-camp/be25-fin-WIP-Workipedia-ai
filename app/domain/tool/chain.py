@@ -6,7 +6,7 @@ from app.domain.chatbot.schemas import SessionMessage
 from pydantic import BaseModel, model_validator
 
 from app.common.exceptions import MaskingBlockedError, ProviderError
-from app.common.masking import tool_masker as masker
+from app.common.masking import masker
 from app.domain.rag.prompt import build_tool_system_prompt
 from app.domain.rag.schemas import GeneratedAnswer, RagResult, RagStatus
 from app.domain.tool.schemas import ToolExecutionResult
@@ -22,23 +22,6 @@ class _LLMAnswerSchema(BaseModel):
         if self.status == "ANSWER" and not (self.answer or "").strip():
             raise ValueError("ANSWER 상태에서 answer는 비어 있을 수 없습니다.")
         return self
-
-
-def _mask_recursive(obj):
-    if isinstance(obj, str):
-        return masker.mask(obj)
-    if isinstance(obj, dict):
-        return {k: _mask_recursive(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_mask_recursive(item) for item in obj]
-    return obj  # int, float 등 — 직렬화 후 2차 마스킹에서 처리
-
-
-def _mask_tool_result(data) -> str:
-    """재귀 마스킹(문자열 필드) 후 직렬화, 직렬화된 문자열에 2차 마스킹(숫자형 PII 처리)."""
-    partially = _mask_recursive(data)
-    serialized = json.dumps(partially, ensure_ascii=False)
-    return masker.mask(serialized)
 
 
 def _extract_text(response) -> str:
@@ -62,10 +45,7 @@ class ToolResultChain:
         custom_prompt: str | None,
         session_context: list[SessionMessage] | None = None,
     ) -> RagResult:
-        try:
-            masked_text = _mask_tool_result(result.data)
-        except MaskingBlockedError:
-            return RagResult(status=RagStatus.BLOCKED)
+        tool_text = json.dumps(result.data, ensure_ascii=False)
 
         history_messages = []
         for msg in (session_context or []):
@@ -77,7 +57,7 @@ class ToolResultChain:
         messages = [
             SystemMessage(content=build_tool_system_prompt(custom_prompt)),
             *history_messages,
-            HumanMessage(content=f"[Tool Result]\n{masked_text}\n\n[Question]\n{query}"),
+            HumanMessage(content=f"[Tool Result]\n{tool_text}\n\n[Question]\n{query}"),
         ]
 
         last_error = ""
@@ -97,7 +77,11 @@ class ToolResultChain:
         if parsed.status == "INSUFFICIENT_RESULT":
             return RagResult(status=RagStatus.NO_RESULT)
 
+        try:
+            masked_answer = masker.mask(parsed.answer)
+        except MaskingBlockedError:
+            return RagResult(status=RagStatus.BLOCKED)
         return RagResult(
             status=RagStatus.SUCCESS,
-            answer=GeneratedAnswer(answer=parsed.answer, references=[]),
+            answer=GeneratedAnswer(answer=masked_answer, references=[]),
         )

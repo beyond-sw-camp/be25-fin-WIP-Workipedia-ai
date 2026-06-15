@@ -1,5 +1,4 @@
-from app.common.exceptions import MaskingBlockedError, ProviderError, WorkipediaException
-from app.common.masking import masker_for
+from app.common.exceptions import ProviderError, WorkipediaException
 from app.core.config import CHUNK_CONFIG, COLLECTION_MAP
 from app.domain.document.chunker import chunk_text
 from app.domain.document.schemas import (
@@ -30,15 +29,9 @@ class DocumentService:
         if not request.text.strip():
             raise ValueError("텍스트가 비어 있습니다.")
 
-        # source_type별 마스킹: WORKI는 전화번호·이메일 포함, 나머지는 주민번호·카드번호만
-        try:
-            masked_text = masker_for(request.source_type).mask(request.text)
-        except MaskingBlockedError as e:
-            raise WorkipediaException(status_code=400, message=f"민감정보 마스킹 실패: {e}") from e
-
         # source_type별 청킹 파라미터 적용 (MANUAL·MANUAL_KNOWLEDGE은 길게, WORKI는 짧게)
         chunk_kwargs = CHUNK_CONFIG.get(request.source_type, {})
-        chunks = chunk_text(masked_text, **chunk_kwargs)
+        chunks = chunk_text(request.text, **chunk_kwargs)
         if not chunks:
             raise WorkipediaException(status_code=422, message="청킹 결과가 없습니다.")
 
