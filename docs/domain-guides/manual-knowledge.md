@@ -1,0 +1,67 @@
+# Manual Knowledge Management
+
+> 상태: Draft  
+> 최종 수정: 2026-06-12
+
+## 목적
+
+파일 매뉴얼로 만들기에는 짧지만 자주 변경되는 사내 정보를 SYSTEM_ADMIN이 직접 등록하여 RAG 지식으로 활용한다.
+
+예:
+
+```text
+제목: VPN 긴급 문의
+분류: IT
+내용: VPN 장애는 IT지원팀 공식 문의 채널로 접수한다.
+```
+
+## 관리 항목
+
+- 제목
+- 내용
+- 분류와 태그
+- 적용 시작일과 만료일
+- 활성 여부
+- 작성자와 최종 수정자
+- 임베딩 동기화 상태
+
+## 처리 흐름
+
+```text
+SYSTEM_ADMIN 등록·수정
+→ BE RDB에 원문 저장
+→ AI 동기화 요청
+→ 800자, overlap 200 기준 chunking 및 embedding
+→ `manual_knowledge_chunks` collection upsert
+→ 챗봇 C단계의 `MANUAL_KNOWLEDGE` 검색 소스에 반영
+```
+
+삭제 또는 비활성화 시 Vector Store에서도 해당 문서와 청크를 제거한다.
+`manual_knowledge`는 `knowledge_data`와 DB·`sourceType`·collection을 분리하고, 두 검색 결과는 챗봇 C단계에서만 병합·reranking한다.
+논리 문서 ID는 `MANUAL_KNOWLEDGE:{source_id}`이며 재인덱싱과 삭제는 이 값을 `doc_id` payload filter로 사용한다.
+
+## 동기화 정책
+
+- 등록·수정·삭제 시 자동 동기화한다.
+- 동기화 작업은 비동기로 처리할 수 있다.
+- 상태는 `PENDING`, `SYNCED`, `FAILED`로 관리한다.
+- 실패 사유와 마지막 시도 시간을 저장한다.
+- SYSTEM_ADMIN에게 재시도 기능을 제공한다.
+- 전체 재동기화는 장애 복구용 개발자 기능으로만 제공한다.
+
+## 파일 매뉴얼과의 구분
+
+| 구분 | 수기 지식 | 파일 매뉴얼 |
+|---|---|---|
+| 대상 | 짧고 자주 바뀌는 공지·연락처·운영 규칙 | 규정집, 업무 매뉴얼, PDF/DOCX |
+| 입력 | 관리자 폼 | 파일 업로드 |
+| 동기화 | 저장 시 자동 | 파싱·청킹 후 적재 |
+| 출처 표시 | 수기 지식 제목과 수정일 | 파일명, 페이지, 버전 |
+
+## 보안
+
+- BE RDB는 암호화 저장하며 읽을 때만 복호화한다.
+- AI 서버는 사용자에게 반환하는 LLM 응답에만 마스킹을 적용한다. Vector Store는 원문을 저장한다.
+- SYSTEM_ADMIN만 생성·수정·삭제할 수 있다.
+- 모든 변경과 동기화 재시도는 감사 로그에 기록한다.
+- 만료된 정보는 검색 결과에서 제외한다.

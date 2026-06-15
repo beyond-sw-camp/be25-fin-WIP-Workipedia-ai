@@ -1,0 +1,32 @@
+[
+  {
+    "name": "bug",
+    "color": "D73A4A",
+    "description": "Something isn't working"
+  },
+  {
+    "name": "docs",
+    "color": "00E78B",
+    "description": "Documentation changes"
+  },
+  {
+    "name": "feature",
+    "color": "A2E9EB",
+    "description": "New feature or request"
+  },
+  {
+    "name": "hotfix",
+    "color": "F91880",
+    "description": "Urgent production fix"
+  },
+  {
+    "name": "refactor",
+    "color": "B8B8B8",
+    "description": "Code refactoring"
+  },
+  {
+    "name": "release",
+    "color": "4B63D3",
+    "description": "Release preparation"
+  }
+]

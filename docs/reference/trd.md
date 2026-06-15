@@ -1,0 +1,536 @@
+# TRD — Workipedia (사내 지식 공유 플랫폼)
+
+> 문서 유형: Technical Requirements Document
+> 상태: Draft
+> 정본 위치: `docs/reference/trd.md`
+> 관련 문서: `docs/reference/service-flow.md`, `docs/reference/prd.md`, `docs/reference/ai-architecture-overview.md`
+> 버전: v0.7
+> 최종 수정: 2026-06-15
+
+---
+
+## 1. 문서 개요
+
+본 문서는 Workipedia의 기술 아키텍처, 데이터 모델, 외부 의존성, 인터페이스 정의를 기술한다. PRD와 함께 읽어야 한다.
+
+---
+
+## 2. 시스템 아키텍처
+
+### 2.1 컴포넌트 구성 (제안)
+
+```
+┌────────────┐    ┌─────────────────────┐    ┌──────────────────┐
+│  Frontend  │───▶│   API Gateway/BFF    │───▶│  Backend (REST)  │
+│ (React 등) │    │                     │    │   (Spring Boot)  │
+└────────────┘    └─────────────────────┘    └──────┬───────────┘
+                                                     │
+               ┌─────────────────────────────────────┼──────────┐
+               ▼                 ▼                   ▼          ▼
+         ┌──────────┐    ┌──────────────┐     ┌──────────┐  ┌────────┐
+         │   RDB    │    │ Elasticsearch│     │  AI 서버 │  │ Redis  │
+         │ (MariaDB)│    │  (BE 전문/   │     │ (FastAPI)│  │        │
+         │          │    │  kNN 검색)   │     └────┬─────┘  └────────┘
+         └──────────┘    └──────────────┘          │
+                                              ┌─────▼──────┐
+                                              │  Qdrant  │
+                                              │ (AI RAG    │
+                                              │  Vector    │
+                                              │  Store)    │
+                                              └────────────┘
+```
+
+### 2.2 기술 스택 (제안)
+| 계층 | 후보 |
+|---|---|
+| Frontend | React/Vue + TypeScript, TanStack Query, TailwindCSS |
+| Backend | Spring Boot 3.x (Java 21) |
+| ORM | JPA(Hibernate) |
+| RDB | MariaDB/MySQL 계열 |
+| BE 검색 엔진 | Elasticsearch 8.15.3 (전문 검색·BE 검색 기능) — ADR 009 참조 |
+| AI Vector Store | Qdrant persistent (RAG·라우팅 후보 검색) |
+| 인증 | JWT (Access + Refresh), 비밀번호 BCrypt |
+| 세션/임시 메시지 저장 | Redis (Refresh Token, Flash Chat TTL 메시지 저장) — ADR 003 참조 |
+| LLM | Local(Ollama), OpenAI, Google, Anthropic, 외부 provider fallback |
+| Embedding | Ollama, OpenAI, Google |
+| 메시지 브로커 | BE RabbitMQ (알림·포인트·ESG 비동기 이벤트) |
+| 실시간 통신 | Spring WebSocket + STOMP (Flash Chat), SSE/폴링 fallback (알림) |
+| 배치 | BE Spring Scheduler (`@Scheduled`) |
+| 인프라 | Docker, Kubernetes(선택), CI/CD: GitHub Actions |
+| 모니터링 | Prometheus + Grafana, 로그: ELK / Loki |
+
+### 2.3 RAG 파이프라인
+
+1. **인덱싱(BE `ai_sync_jobs` + 일일 정합성 점검)** — KNOIT_006
+   - BE `@Scheduled` 워커가 object storage에서 매뉴얼·워키·수기 지식·승인 지식 파일을 내려받아 AI API로 전달
+   - AI API: `POST /api/v1/documents/ingest`, `DELETE /api/v1/documents/{source_id}?source_type=...`
+   - 인덱싱 API는 `multipart/form-data`의 `source_id`, `source_type`, `title`, `file`을 수신하고 PDF, DOCX, TXT를 파싱
+   - AI 서버가 source type별 청킹 설정을 적용
+   - Qdrant collection: `manual_chunks`, `worki_chunks`, `knowledge_data_chunks`, `manual_knowledge_chunks`이며, 같은 이름의 BE RDB chunk 테이블과 저장 책임은 별개
+   - 논리 chunk ID `{source_type}:{source_id}:{chunk_index}`를 deterministic UUID point ID로 변환
+   - 선택된 Embedding provider로 임베딩 생성 → Qdrant에 upsert
+   - vector size는 `local=1024`, `openai=1536`, `google=768`
+   - 재인덱싱은 임베딩 성공 후 기존 `doc_id` point를 삭제하여 임베딩 실패 시 기존 검색 데이터를 유지
+   - 일일 배치는 누락·실패 데이터 재처리와 RDB/Qdrant 정합성 점검에 사용
+
+AI 서버는 RabbitMQ를 직접 구독하지 않는다. BE가 `ai_sync_jobs`를 기준으로 AI HTTP API를 호출한다.
+
+2. **질의 처리(실시간)** — KNOIT_001~003
+   - 사용자 질문 임베딩 → Vector Store 유사도 검색(top-k)
+   - 검색 후보를 로컬 Cross-Encoder로 재정렬하고 본문, metadata, Qdrant 원본 점수, Cross-Encoder 원본 점수와 rank를 유지
+   - 검색된 chunk + 원본 매뉴얼/워키 메타 → LLM 프롬프트 컨텍스트 구성
+   - LLM은 `ANSWER` 또는 `INSUFFICIENT_CONTEXT`, 답변, 인용 chunk ID를 JSON으로 반환
+   - JSON 스키마와 인용 ID를 검증한 뒤 답변 + 출처 메타를 함께 반환(KNOIT_003)
+   - 채팅 메시지 저장(KNOIT_004) → `chatbot_sessions`, `chatbot_messages`
+
+3. **실패 / 불만족 / 요청 전환 흐름** — KNOIT_005
+   - 검색 결과 없음, Cross-Encoder 점수 미달, 출처 검증 실패 시 `NO_RESULT` 반환
+   - LLM 답변 문자열이 아니라 구조화된 실행 상태로 다음 폴백 단계를 결정
+   - 사용자 불만족 피드백 → 워키 질문 등록 흐름으로 분기
+   - 실제 처리나 공식 확인이 필요한 경우 → 요청 티켓 생성 흐름으로 분기, 챗봇 입력 내용을 요청 초안으로 전달
+
+4. **A→B→C→D 폴백 오케스트레이션**
+   - A: 매뉴얼 RAG
+   - B: 워키 RAG
+   - C: 지식 RAG
+     - TEAM_ADMIN 승인 지식화 게시판(`KNOWLEDGE_DATA`)
+     - SYSTEM_ADMIN 수기 지식(`MANUAL_KNOWLEDGE`)
+   - D: 등록된 API 또는 승인 DB Query Tool
+   - `knowledge_data`와 `manual_knowledge`는 DB·`sourceType`·collection을 분리하고 C단계 검색 결과만 통합 reranking
+   - `SUCCESS`와 `BLOCKED`는 즉시 종료하고 `NO_RESULT`와 예상 가능한 provider 오류는 다음 단계로 진행
+   - 단계 timeout은 실행 중 thread 중복을 막기 위해 `ERROR`로 즉시 반환하고 다음 단계를 실행하지 않음
+   - 모든 단계 실패 시 워키 등록 또는 요청 티켓 생성 전환 액션 반환
+
+5. **지식화 발행과 Vector Store 동기화**
+   - TEAM_ADMIN 승인 트랜잭션에서 지식 문서와 `PENDING` 동기화 상태를 RDB에 저장
+   - RDB 커밋 후 비동기 작업이 청킹, 임베딩, Vector Store upsert 수행
+   - 성공 시 `SYNCED`, 실패 시 `FAILED`와 실패 사유 저장
+   - 실패 건은 재시도할 수 있으며 RDB와 Vector Store를 하나의 로컬 트랜잭션으로 묶지 않음
+
+### 2.4 Flash Chat 흐름
+
+1. 사용자가 Flash Chat 화면에 진입하면 현재 활성 메시지 목록을 조회한다.
+2. 클라이언트는 STOMP topic `/topic/flash-chat`을 구독한다.
+3. 메시지와 답장은 `/app/flash-chat/send`로 전송한다.
+4. 서버는 메시지를 Redis에 TTL 600초로 저장하고 구독자에게 브로드캐스트한다.
+5. SYSTEM_ADMIN은 `flash_chat_policy`의 TTL, 쿨다운, 금지어를 변경하고 메시지를 강제 삭제할 수 있다.
+6. 정책 변경과 강제 삭제는 `admin_logs`에 기록하며, 강제 삭제 시 `/topic/flash-chat`으로 삭제 이벤트를 브로드캐스트한다.
+
+Flash Chat 메시지는 전사 공개 임시 채팅이며, 영구 DB 저장 대상이 아니다.
+좋아요 반응(`/app/flash-chat/react`)은 MVP 이후 범위다.
+
+Redis 키 구조:
+
+| 키 | 타입 | 용도 |
+|---|---|---|
+| `flash-chat:msg:{uuid}` | Hash | userId, nickname, content, replyToId, createdAt, expiresAt 저장. 정책 TTL 적용 |
+| `flash-chat:messages` | Sorted Set | member=messageId, score=createdAt epoch(ms)인 활성 메시지 인덱스 |
+| `flash-chat:cooldown:{userId}` | String | 사용자별 전송 쿨다운 표시. 쿨다운이 0초면 생성하지 않음 |
+
+---
+
+## 3. 데이터 모델
+
+### 3.1 현재 DB 기준
+
+DB 스키마 정본은 `src/main/resources/db/migration`의 Flyway migration이며, 본 문서는 **현재 repository에 존재하는 migration 전체를 적용한 스키마**를 기준으로 한다.
+
+아직 migration이 없는 기능은 `3.4 추가 예정 테이블/컬럼`에 별도로 둔다.
+
+### 3.2 현재 migration 기준 주요 테이블
+
+| 테이블 | 용도 |
+|---|---|
+| `users` | 사용자 계정 (사번, 부서, role) |
+| `departments` | 부서 마스터 |
+| `department_routing_prompts` | 부서별 R&R 프롬프트 |
+| `routing_rules` | 키워드 기반 부서 배정 규칙 |
+| `worki_questions` | 워키 질문 |
+| `worki_answers` | 워키 답변 |
+| `reactions` | 좋아요/싫어요 |
+| `manuals` | 사내 매뉴얼/규정 |
+| `chatbot_sessions` | 챗봇 대화 세션 |
+| `chatbot_messages` | 챗봇 메시지(질문/답변 단위) |
+| `tickets` | 부서 배정 티켓 |
+| `ticket_answers` | 티켓 공식 답변 |
+| `ticket_status_logs` | 티켓 상태 변경 이력 |
+| `ticket_transfer_requests` | 티켓 이관 요청 및 처리 이력 |
+| `ticket_assignments` | 티켓 담당자 배정 이력 |
+| `ticket_routing_logs` | 자동 배정 점수와 근거 |
+| `knowledge_data` | TEAM_ADMIN이 승인한 티켓 지식 데이터 |
+| `user_points` / `point_history` / `points_daily_limit` | 사용자 현재 포인트, 포인트 적립 이력, 일일 적립 한도 |
+| `esg_grade` | ESG 점수 기반 등급 기준 |
+| `notifications` | 알림 |
+| `worki_chunks` | 워키 문장 조각 (검색·인용 단위) |
+| `worki_search_logs` | 워키 검색어와 선택한 검색 결과 로그 |
+| `manual_chunks` | 매뉴얼 문장 조각 (검색·인용 단위) |
+| `manual_versions` | 매뉴얼 버전 이력 |
+| `manual_citations` | RAG/답변에서 참조한 매뉴얼 조각 인용 이력 |
+| `worki_search_keywords` | 워키 검색 키워드 통계 |
+| `flash_chat_policy` | Flash Chat TTL, 쿨다운, 금지어 정책 |
+| `ai_tools` | API/DB Query Tool 정의, 입력·응답 스키마와 활성·승인 상태 |
+| `admin_logs` | 관리자 작업 로그 |
+
+### 3.3 현재 migration 기준 핵심 컬럼 메모
+
+#### users
+- `user_id` BIGINT PK (AUTO_INCREMENT)
+- `department_id` BIGINT FK → departments
+- `role` VARCHAR(30) CHECK IN ('USER','TEAM_ADMIN','SYSTEM_ADMIN'), 기본 USER
+- `employee_id` VARCHAR(100) UNIQUE NOT NULL — 사번
+- `email` VARCHAR(255) UNIQUE NOT NULL
+- `password` VARCHAR(255) NOT NULL
+- `nickname` VARCHAR(100) NOT NULL, 중복 허용
+- `status` VARCHAR(20) CHECK IN ('ACTIVE','INACTIVE'), 기본 ACTIVE
+- `last_login_at`, 시간컬럼, soft delete 컬럼
+
+#### worki_questions
+- `question_id` PK, `author_id` FK, `source_chatbot_message_id` FK NULL, `title`, `content`
+- `status` (WAITING / IN_PROGRESS / ANSWERED / TICKETED 등)
+- `accepted_answer_id` FK NULL, `view_count`, `modified_source`, 시간컬럼, soft delete 컬럼
+
+#### worki_answers
+- `answer_id` PK, `question_id` FK, `author_id` FK
+- `ticket_id` FK NULL (티켓 공식 답변에서 생성된 경우)
+- `content`, `official` BOOLEAN, `accepted` BOOLEAN, `accepted_at`, `modified_source`, 시간컬럼, soft delete 컬럼
+
+#### reactions
+- `reaction_id` PK, `user_id` FK
+- `target_type` (WORKI_QUESTION / WORKI_ANSWER)
+- `target_id`, `reaction_type` (LIKE / DISLIKE)
+- 사용자와 대상 조합은 unique
+- `modified_source`, 시간컬럼, soft delete 컬럼
+
+#### tickets
+- `ticket_id` PK
+- `requester_id` FK → users
+- `source_chatbot_message_id` FK → chatbot_messages NULL 허용
+- `title`, `content`
+- `priority` (MEDIUM / HIGH), 기본 MEDIUM
+- `assignee_id` FK → users NULL 허용 (TEAM_ADMIN이 담당 팀원 배정)
+- `assigned_department_id` FK → departments NULL 허용
+- `routing_confidence_score` DECIMAL(5,2)
+- `routing_decision` (AUTO_ASSIGNED / ADMIN_REVIEW / COMMON_QUEUE / NEED_MORE_INFO)
+- `status` (RECEIVED / COMMON_QUEUE / ASSIGNED / IN_PROGRESS / COMPLETED / REJECTED / DELETED)
+- `completed_at`, 시간컬럼, soft delete 컬럼
+
+#### ticket_answers
+- `ticket_answer_id` PK
+- `ticket_id` FK → tickets
+- `author_id` FK → users
+- `content`, 시간컬럼, soft delete 컬럼
+
+#### ticket_status_logs
+- `status_log_id` PK
+- `ticket_id` FK → tickets
+- `changed_by` FK → users NULL 허용
+- `previous_status`, `new_status`, `reason`
+- 시간컬럼, soft delete 컬럼
+
+#### ticket_assignments
+- `assignment_id` PK
+- `ticket_id` FK → tickets
+- `assignee_id` FK → users
+- `assigned_by` FK → users (TEAM_ADMIN 또는 SYSTEM_ADMIN)
+- `memo`, 시간컬럼, soft delete 컬럼
+
+#### ticket_routing_logs
+- `routing_log_id` PK
+- `ticket_id` FK → tickets
+- `confidence_score` DECIMAL(5,2)
+- `candidate_departments_json` JSON
+- `reasons_json` JSON
+- `routed_by` FK → users NULL 허용
+- `decision` (AUTO_ASSIGNED / ADMIN_REVIEW / COMMON_QUEUE / NEED_MORE_INFO)
+- 시간컬럼, soft delete 컬럼
+
+#### knowledge_data
+- `knowledge_data_id` PK
+- `ticket_id` FK → tickets
+- `title`, `content`
+- `department_id` FK → departments NULL 허용
+- `approved_by` FK → users (TEAM_ADMIN)
+- `approved_at`, 시간컬럼, soft delete 컬럼
+- 티켓당 하나의 승인 지식만 저장하도록 `ticket_id` UNIQUE
+
+#### ai_tools
+- `ai_tool_id` PK
+- `name`, `description`, `tool_type` (HTTP_API / DB_QUERY)
+- HTTP API: `endpoint_url`, `http_method`
+- DB Query: `datasource_key`, `query_template`
+- `parameters_schema`, `response_schema`
+- `auth_type`, `credential_ref`
+- `timeout_ms`, `max_result_count`
+- `approval_status` (DRAFT / APPROVED / REJECTED), `is_active`
+- `created_by`, `updated_by` FK → users
+- 공통 시간컬럼, soft delete, `modified_source`
+
+#### ticket_transfer_requests
+- `transfer_request_id` PK
+- `ticket_id` FK → tickets
+- `from_department_id`, `suggested_department_id` NULL 허용
+- `requester_id` FK → users (TEAM_ADMIN)
+- `status` (REQUESTED / ASSIGNED_FROM_QUEUE / REJECTED)
+- `reason`, 시간컬럼
+- 이관 요청이 생성되면 티켓은 `COMMON_QUEUE` 상태로 이동하며, `SYSTEM_ADMIN`이 공통 접수 큐에서 담당 부서를 재배정한다.
+
+#### chatbot_messages
+- `message_id` PK, `session_id` FK
+- `sender_type` (USER / ASSISTANT / SYSTEM)
+- `content`
+- `answerable` BOOLEAN NULL
+- `next_action` (SHOW_SOURCES / CREATE_WORKI / CREATE_TICKET)
+- `references_json` JSON (참조한 매뉴얼/워키 chunk 목록)
+- `source_worki_question_id` FK NULL (워키 질문으로 전환된 경우)
+- `source_ticket_id` FK NULL (요청 티켓으로 전환된 경우)
+- 시간컬럼, soft delete 컬럼
+
+#### worki_chunks / manual_chunks
+- `worki_chunk_id` / `manual_chunk_id` PK
+- `source_type`, `source_id`, `question_id`, `answer_id` (worki_chunks)
+- `manual_id`, `chunk_index` (manual_chunks)
+- `content` TEXT
+- `embedding_json` JSON NULL
+
+#### admin_logs
+- `admin_log_id` PK, `actor_id` (관리자) FK
+- `action_type` CHECK IN ('USER_DEACTIVATE','WORKI_READ','WORKI_UPDATE','WORKI_DELETE','MANUAL_UPDATE','MANUAL_DELETE','TICKET_ASSIGN','TICKET_TRANSFER_REQUEST','TICKET_ROUTE_OVERRIDE','COMMON_QUEUE_ASSIGN','KNOWLEDGE_REVIEW','KNOWLEDGE_PUBLISH', ...)
+- `target_type`, `target_id`, `description`, `metadata_json`, 시간컬럼, soft delete 컬럼
+
+#### departments
+- 현재 migration 기준 컬럼명은 `department_name`
+- V5에서 `code`, `description` 컬럼은 제거됨
+
+### 3.4 추가 예정 테이블/컬럼
+
+아래 항목은 PRD/TRD 기능 설계에는 포함되지만, 현재 migration에는 아직 없다. 구현 시 신규 migration으로 추가한다.
+
+| 항목 | 용도 | 예상 migration |
+|---|---|---|
+| `attachments` | 티켓/요청 사진 첨부 메타데이터 | 신규 migration |
+| `ai_prompt_settings` | SYSTEM_ADMIN이 관리하는 챗봇 custom_prompt와 활성 상태 | 신규 migration |
+| `manual_knowledge` | SYSTEM_ADMIN 수기 지식과 동기화 상태 | 신규 migration |
+| `tool_call_logs` | Tool 호출 감사 및 성공·실패 이력 | 신규 migration |
+| `ticket_routing_cases` | TEAM_ADMIN이 승인한 부서 라우팅 검색 사례 | 신규 migration |
+| `knowledge_data.sync_status` 등 | Qdrant 동기화 상태·실패 사유·문서 ID | 신규 migration |
+
+> 상세 컬럼·제약의 최종 정본은 Flyway migration이다.
+
+#### flash_chat_policy
+
+- V12에서 생성된 Flash Chat 운영 정책 단일 행 테이블이다.
+- `message_ttl_seconds`: 메시지 보존 시간, 기본 600초
+- `send_cooldown_seconds`: 사용자별 전송 쿨다운, 기본 0초
+- `banned_words`: 금지어 목록 JSON
+- 공통 필드 `created_at`, `updated_at`, `deleted_at`, `is_deleted`, `modified_source`를 사용한다.
+- 정책 변경은 `FLASH_CHAT_CONFIG_UPDATE`, 메시지 강제 삭제는 `FLASH_CHAT_MESSAGE_DELETE`로 `admin_logs`에 기록한다.
+
+---
+
+## 4. API 설계 원칙
+
+### 4.1 공통
+- REST + JSON
+- 인증: `Authorization: Bearer <JWT>`
+- 페이지네이션: `?page=&size=&sort=`
+- 응답 표준: `{ "data": ..., "error": null, "meta": {...} }`
+
+### 4.2 주요 엔드포인트 (예시)
+
+| Method | Path | 설명 |
+|---|---|---|
+| POST | `/auth/signup` | 회원가입 |
+| POST | `/auth/login` | 로그인 |
+| POST | `/auth/logout` | 로그아웃 |
+| GET  | `/me` | 내 정보 |
+| POST | `/chatbot/sessions` | 세션 생성 |
+| POST | `/chatbot/sessions/{id}/messages` | 챗봇 질의 |
+| GET  | `/chatbot/sessions/{id}/messages` | 세션 내 메시지 조회 |
+| POST | AI `/api/v1/chat` | BE가 호출하는 질문 단위 RAG 추론 |
+| GET  | `/worki/questions` | 질문 목록 (검색·필터·정렬) |
+| POST | `/worki/questions` | 질문 등록 |
+| PATCH | `/worki/questions/{id}` | 질문 수정 (WAITING 상태만) |
+| POST | `/worki/questions/{id}/answers` | 답변 등록 |
+| POST | `/worki/answers/{id}/accept` | 답변 채택 |
+| POST | `/worki/{target}/{id}/reactions` | 좋아요/싫어요 |
+| GET  | `/tickets` | 티켓 목록 (본인/부서) |
+| POST | `/tickets` | 요청 티켓 생성 |
+| POST | `/attachments` | 이미지 첨부 업로드 |
+| GET | `/attachments/{id}` | 첨부 이미지 조회 |
+| GET | `/flash-chat/messages` | 활성 Flash Chat 메시지 조회 |
+| PATCH | `/tickets/{id}/status` | 상태 변경 |
+| PATCH | `/tickets/{id}/assignee` | 팀원 담당자 배정 |
+| POST | `/tickets/{id}/transfer-requests` | TEAM_ADMIN 티켓 이관 요청 |
+| PATCH | `/admin/common-queue/tickets/{id}/department` | SYSTEM_ADMIN 공통 접수 큐 티켓 부서 재배정 |
+| POST | `/tickets/{id}/knowledge-data` | TEAM_ADMIN이 처리 완료 티켓의 지식 데이터를 승인·저장 |
+| GET | `/knowledge-data/{id}` | 승인 지식 데이터 조회 |
+| GET  | `/manuals` / GET `/manuals/{id}` | 매뉴얼 조회 |
+| GET  | `/esg/metrics/me` | 내 ESG 지표 조회 |
+| GET  | `/admin/dashboard` | 관리자 대시보드 데이터 |
+| DELETE | `/admin/worki/{id}` | 워키 삭제(관리자 전용) |
+| GET/POST | `/admin/ai-tools` | API Tool 및 승인된 DB Query Tool 조회·등록 |
+| PATCH | `/admin/ai-tools/{id}` | Tool 설정과 활성 상태 변경 |
+| POST | `/admin/ai-tools/{id}/test` | 권한과 마스킹을 적용한 Tool 테스트 호출 |
+| GET/POST | `/admin/manual-knowledge` | 수기 지식 조회·등록 |
+| PATCH/DELETE | `/admin/manual-knowledge/{id}` | 수기 지식 수정·삭제 |
+| POST | `/admin/manual-knowledge/{id}/sync` | 실패한 임베딩 동기화 재시도 |
+
+WebSocket/STOMP:
+
+| Type | Path | 설명 |
+|---|---|---|
+| Connect | `/ws/flash-chat` | STOMP 연결 endpoint (SockJS 지원) |
+| Connect | `/ws/flash-chat-native` | Native WebSocket STOMP 연결 endpoint |
+| Subscribe | `/topic/flash-chat` | Flash Chat 메시지/삭제 이벤트 수신 |
+| Send | `/app/flash-chat/send` | Flash Chat 메시지 전송 |
+
+---
+
+## 5. 보안 요구사항
+
+| 항목 | 요구사항 |
+|---|---|
+| 비밀번호 | 8자 이상 영문+숫자 / BCrypt 저장 |
+| 인증 | JWT(짧은 Access + Refresh), HttpOnly 쿠키 또는 헤더 |
+| 권한 검사 | 모든 변경 API에서 USER/TEAM_ADMIN/SYSTEM_ADMIN/부서원 권한 명시 검증 |
+| 개인정보 마스킹 | KNOIT_007 — 사용자에게 반환하는 LLM 응답에만 마스킹 적용. 주민번호·카드번호는 항상, 전화번호·이메일은 설정에 따라 마스킹. BE RDB는 암호화 저장 |
+| 개인정보 답변 거부 | KNOIT_008 — LLM 응답 후처리에 개인정보 유출 검사 |
+| Flash Chat 임시성 | 메시지는 Redis TTL로 삭제하며 영구 DB에 저장하지 않음 |
+| 파일 첨부 | 이미지 MIME/크기 제한, 저장 경로 직접 노출 금지, 고객사별 S3/MinIO adapter 선택 |
+| 관리자 추적 | 모든 TEAM_ADMIN/SYSTEM_ADMIN 작업은 `admin_logs`에 기록 |
+| 퇴사자 차단 | `users.status = INACTIVE` 사용자는 로그인 거부 |
+| 데이터 보존 | 워키 게시글은 USER가 직접 삭제 불가, soft delete 사용 |
+
+---
+
+## 6. 비기능 요구사항(NFR)
+
+| 항목 | 목표 |
+|---|---|
+| 챗봇 응답 시간 (p95) | 5초 이내 |
+| 워키 목록 조회 (p95) | 500ms 이내 |
+| 가용성 | 평일 09:00~19:00 사내 SLA 99.5% |
+| 임베딩 배치 | 일 1회, 1만 chunk 기준 30분 이내 |
+| Flash Chat TTL | 기본 600초 |
+| Flash Chat 전송 쿨다운 | 기본 0초(비활성), 관리자 설정 가능 |
+| 동시 사용자 | 사내 동시 접속 500명 기준 |
+| 로깅 | 마스킹된 챗봇 질의/응답, 관리자 작업, 인증 이벤트 기록 |
+
+---
+
+## 7. 외부 의존성
+
+| 의존성 | 사용 목적 | 위험 / 대응 |
+|---|---|---|
+| LLM Provider | RAG 답변 생성 | Local/Ollama, OpenAI, Google, Anthropic, fallback. 응답 반환 전 출력 마스킹 적용 |
+| Embedding Provider | 문서·질문 임베딩 | Local(Ollama), OpenAI, Google. provider별 출력 차원 적용 |
+| Cross-Encoder Reranker | 검색 후보 재정렬 | 후보별 `candidate_id`, `text`, `score`, `rank`, `metadata`, `retrieval_score` 반환 |
+| Object Storage | 이미지 첨부 저장 | 고객사별 S3/MinIO 구현체 교체 |
+
+---
+
+## 8. 운영 / 배포
+
+### 8.1 환경 분리
+- `dev` / `staging` / `prod` 3단계
+- DB 마이그레이션: Flyway / Liquibase
+- 비밀 키: AWS Secrets Manager / HashiCorp Vault
+
+### 8.2 모니터링·알람
+- 챗봇 응답 시간, LLM 호출 실패율, 임베딩 배치 성공 여부, 티켓 SLA 초과 건수 등을 대시보드화
+- 핵심 지표 임계치 초과 시 운영 채널(Slack 등) 알람
+
+### 8.3 백업
+- RDB 일 1회 풀백업 + 시간 단위 증분
+- Vector Store: 재구축 가능 구조이므로 백업 우선순위는 낮음 (단, 임베딩 비용 절감 위해 주기적 스냅샷 권장)
+
+### 8.4 현재 인덱싱 구현 상태
+
+- PDF, DOCX, TXT 파일 업로드 기반 문서 인덱싱·삭제 API가 구현되어 있다.
+- Qdrant adapter, source type별 collection과 최신 청킹 설정이 구현되어 있다.
+- embedding provider enum은 `local`, `openai`, `google`이며 provider별 vector size가 적용되어 있다.
+- 재인덱싱은 임베딩 성공 뒤 기존 point를 삭제해 실패 시 기존 검색 데이터를 유지한다.
+- 실제 Qdrant 통합 테스트, `doc_id` payload index, scroll pagination은 후속 작업이다.
+
+### 8.5 현재 retrieval/reranking 구현 상태
+
+- `RagCandidate`와 `RerankedCandidate` 데이터 계약이 구현되어 있다.
+- Cross-Encoder 모델은 `@lru_cache(maxsize=1)` 팩토리로 프로세스당 한 번 생성한다.
+- 모델 로드와 predict 실패를 `ProviderError("cross-encoder", ...)`로 변환한다.
+- `RagRetriever`, `RagService`, FastAPI lifespan preload 연결이 구현되어 있다.
+- 조회 시 collection 자동 생성 제거와 미존재 오류 구조화가 구현되어 있다.
+
+### 8.6 현재 답변 생성 구현 상태
+
+- `RagChain`이 reranking 후보를 받아 구조화된 LLM 답변을 생성한다.
+- LLM 응답의 `ANSWER`/`INSUFFICIENT_CONTEXT` 상태와 `cited_ids`를 Pydantic 스키마로 검증한다.
+- 검색 후보 없음, 최고 점수 미달, 근거 부족, 빈 인용, 존재하지 않는 인용은 `NO_RESULT`로 처리한다.
+- 기본 프롬프트가 SYSTEM_ADMIN custom prompt보다 우선하며 context 외 지식 사용을 금지한다.
+- JSON 파싱·스키마 오류는 1회 재시도하고 provider 오류는 infra 재시도 후 즉시 `ERROR`로 변환한다.
+- 관련 단위 테스트는 구현되어 있으며 실제 Ollama 통합 테스트와 평가셋 기반 임계값 보정은 후속 작업이다.
+
+### 8.7 폴백 오케스트레이터와 챗봇 endpoint
+
+- `ManualRagStep`, `WorkiRagStep`, `KnowledgeRagStep`, `ToolCallingStep`을 공통 `StepRunner` 계약으로 구현한다.
+- `ChatbotService`가 최근 세션 컨텍스트 선택, 후속 질문 contextualize, LLM 응답 출력 마스킹을 담당한다.
+- `RagOrchestrator`는 답변용 `query`와 검색용 `retrieval_query`를 분리해 A→B→C→D 단계를 순회하고 각 결과를 `StepRecord`에 남긴다.
+- A/B/C 검색·reranking과 D Tool 선택은 `retrieval_query`를 사용하고, 최종 답변 생성은 원본 의미를 보존한 `query`와 세션 기록을 사용한다.
+- contextualize provider 오류나 timeout은 원본 질문으로 fallback하고 `CONTEXT/ERROR`를 기록한다.
+- D단계는 현재 `NO_RESULT` stub이며, 확정된 구조와 구현·테스트 계획은 `docs/domain-guides/tool-integration.md`를 정본으로 사용한다.
+- `ChatbotService`가 오케스트레이터를 호출하고 AI `POST /api/v1/chat` endpoint가 결과를 응답 스키마로 변환한다.
+- 요청은 `question`, 신뢰된 BE의 `customPrompt`, `sessionContext`를 받으며 JSON은 camelCase를 사용한다.
+- `sessionContext`는 `USER`와 `ASSISTANT`만 허용하고 최근 기본 10개 메시지만 사용한다. 설정값이 0이면 history와 contextualize를 비활성화한다.
+- 질문은 최대 2,000자, 세션 메시지와 custom prompt는 각각 최대 4,000자로 제한한다.
+- contextualize provider HTTP timeout은 기본 25초, outer timeout은 30초다.
+- 일반 사용자에게 `customPrompt`와 미사용 `top_k`를 직접 노출하지 않는다.
+- 성공 응답 출처는 `candidate_id`, `source_type`, `source_id`, `chunk_index`(nullable), `title`, `score`, 선택적 `link`를 포함한다. `chunk_index`는 BE가 `manual_chunks` 테이블에서 `(manual_id, chunk_index)`로 `manual_chunk_id`를 조회할 때 사용한다.
+- AI는 출처 식별 계약까지만 제공하고, `manual_citations` 저장·답변 단위 중복 방지·FAQ 인기 매뉴얼 캐시 무효화는 BE가 처리한다.
+- 응답은 단계별 `stepHistory`를 포함하며 contextualize fallback도 이력에서 확인할 수 있다.
+- `BLOCKED`, `NO_RESULT + CREATE_TICKET`, `ERROR`는 각각 안전 응답, 티켓 전환 안내, 일시적 오류 안내로 구분한다.
+- endpoint 테스트는 `SUCCESS`, `BLOCKED`, `CREATE_TICKET`, `ERROR`, 빈 질문 `422`를 포함한다.
+- 오케스트레이터와 endpoint는 구현되어 있다. D단계 Tool Calling 실제 연동은 이슈 #11 범위로 남아 있다.
+
+### 8.8 티켓 부서 라우팅
+
+- AI 내부 API는 `POST /api/v1/tickets/routing`이다.
+- 부서 R&R과 승인 사례의 단건 동기화·삭제 API는 `POST /api/v1/knowledge/sync`, `DELETE /api/v1/knowledge/{source_id}?sourceType=...`이다.
+- 요청은 `title`, `content`, 선택적 `sourceChatbotMessageId`를 받는다.
+- BE 연동 JSON은 camelCase이며 AI 내부 Pydantic 필드는 alias 설정을 통해 snake_case로 관리한다.
+- 질의 embedding은 한 번 생성하고 `routing_dept_rr`, `routing_cases` 두 collection 검색에 재사용한다.
+- collection별 top 20 검색 결과를 부서 ID로 그룹화하고 vector 최고 점수 기준 상위 3개 부서를 선택한다.
+- 부서별 R&R 상위 1개와 승인 사례 상위 3개를 context로 구성해 로컬 Cross-Encoder로 reranking한다.
+- AI가 1위 raw score와 1·2위 score margin을 계산해 `AUTO_ASSIGNED` 또는 `COMMON_QUEUE`를 결정한다.
+- 후보 부서가 하나뿐이거나 score·margin이 임계값 미만이면 공통 접수 큐로 보낸다.
+- embedding 또는 Qdrant 실패는 HTTP 500, Cross-Encoder 실패는 `COMMON_QUEUE` 정상 응답으로 처리한다.
+- `routing_score_threshold`, `routing_margin_threshold`는 환경변수로 조정한다.
+- `DEPT_RR`은 부서 ID, `ROUTING_CASE`는 승인 사례 고유 ID를 source ID로 사용한다.
+- 라우팅 지식은 `title + "\n" + content`를 임베딩하고 `{sourceType}:{sourceId}:0` 단일 논리 chunk ID로 선행 삭제 없이 upsert한다.
+- 동기화 payload는 `department_id`, `department_name`, `type`을 포함하며 라우팅 검색의 부서 그룹화에 직접 사용한다.
+- 동일 source의 작업 순서와 오래된 재시도 무효화는 BE #84 `ai_sync_jobs`가 담당한다.
+- embedding·Qdrant 실패는 HTTP 500, 없는 데이터 삭제는 `deletedChunks: 0` 정상 응답으로 처리한다.
+- 부서 R&R 및 승인 사례 인덱싱은 이슈 #13, 데이터 유형별 마스킹은 이슈 #31 범위다. 마스킹 적용 전에는 BE가 개인정보 없는 라우팅 지식만 전달하며 로컬·클라우드 embedding provider를 모두 허용한다.
+- 상세 API와 데이터 계약은 `docs/domain-guides/ticket-routing-ai.md`를 정본으로 사용한다.
+
+---
+
+## 9. 마이그레이션 / 데이터 초기화
+
+- 매뉴얼 초기 데이터 적재: 사내 규정 문서 → 관리자 페이지 일괄 업로드 또는 운영 스크립트
+- 짧은 운영 정보: SYSTEM_ADMIN 수기 지식 등록 → 저장 시 Vector Store 자동 동기화
+- 부서 마스터 적재: 인사팀 데이터 기준
+- 초기 사용자: 사번 기반 일괄 등록 + 첫 로그인 시 비밀번호 설정 흐름
+
+---
+
+## 10. 미해결 기술 이슈
+
+1. 실제 Qdrant 통합 테스트와 `doc_id` payload index
+2. Cross-Encoder 점수 정규화와 RAG `NO_RESULT` 임계값
+3. 티켓 라우팅의 1위 최소 점수와 1·2위 최소 점수 차이
+4. 워키 답변 우선순위 (정책 미확정 — PRD §7 참조)
+5. 챗봇 응답 캐싱 정책 (질문 유사도 기반 캐시 hit 조건)
+6. embedding provider 또는 모델 변경 시 collection 재색인 운영 절차
+7. 고객사별 이미지 저장소 설정과 S3/MinIO 운영 정책
+8. Flash Chat 메시지 최대 보존 개수
+9. provider HTTP timeout과 오케스트레이터 단계 timeout 정렬
+10. SYSTEM_ADMIN custom prompt의 신뢰된 BE→AI 전달 방식

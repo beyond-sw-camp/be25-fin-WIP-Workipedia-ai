@@ -1,0 +1,53 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.13.6
+    container_name: workipedia-qdrant
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+    volumes:
+      - workipedia-qdrant-data:/qdrant/storage
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:6333/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  ollama:
+    image: ollama/ollama:0.30.7
+    container_name: workipedia-ollama
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - workipedia-ollama-data:/root/.ollama
+    environment:
+      TZ: ${TZ:-Asia/Seoul}
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  ollama-init:
+    image: ollama/ollama:0.30.7
+    container_name: workipedia-ollama-init
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama pull ${CHAT_MODEL:-llama3.1:8b}
+        ollama pull ${EMBEDDING_MODEL:-bge-m3}
+    restart: "no"
+
+volumes:
+  workipedia-qdrant-data:
+  workipedia-ollama-data:
