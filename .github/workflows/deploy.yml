@@ -1,0 +1,116 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/beyond-sw-camp/be25-fin-wip-workipedia-ai
+
+jobs:
+  build:
+    name: Build and Push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Configure SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519_workipedia_deploy
+          chmod 600 ~/.ssh/id_ed25519_workipedia_deploy
+          ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+
+          cat > ~/.ssh/config <<EOF
+          Host workipedia-bastion
+            HostName $DEPLOY_HOST
+            Port $DEPLOY_PORT
+            User $DEPLOY_USER
+            IdentityFile ~/.ssh/id_ed25519_workipedia_deploy
+
+          Host workipedia-ai
+            HostName 192.168.0.162
+            User $DEPLOY_USER
+            IdentityFile ~/.ssh/id_ed25519_workipedia_deploy
+            ProxyJump workipedia-bastion
+            StrictHostKeyChecking accept-new
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Log in to GHCR on AI server
+        env:
+          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
+          GHCR_PAT: ${{ secrets.GHCR_PAT }}
+        run: |
+          printf '%s' "$GHCR_PAT" | ssh workipedia-ai \
+            "docker login ghcr.io -u '$GHCR_USERNAME' --password-stdin"
+
+      - name: Deploy AI
+        env:
+          AI_IMAGE: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+        run: |
+          ssh workipedia-ai "AI_IMAGE='$AI_IMAGE' bash -s" <<'EOF'
+          set -euo pipefail
+
+          infra_dir="$HOME/apps/workipedia/Workipedia-infra"
+          cd "$infra_dir"
+          git pull --ff-only
+          ./scripts/deploy.sh ai
+
+          for attempt in $(seq 1 40); do
+            if curl -fsS http://192.168.0.162:8000/health; then
+              docker image prune -f
+              exit 0
+            fi
+            sleep 10
+          done
+
+          docker compose \
+            --env-file ai/.env \
+            --file ai/docker-compose.yml \
+            logs --tail=200 ai
+          exit 1
+          EOF
