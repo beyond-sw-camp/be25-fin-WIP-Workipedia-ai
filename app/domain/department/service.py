@@ -46,6 +46,9 @@ def _parse_llm_response(content: str, targets: list[DepartmentTarget]) -> list[D
     except (json.JSONDecodeError, AttributeError) as exc:
         raise ProviderError("llm", f"LLM 응답을 JSON으로 파싱할 수 없습니다: {exc}") from exc
 
+    if not isinstance(raw_results, list):
+        raise ProviderError("llm", f"LLM 응답의 results가 리스트가 아닙니다: {type(raw_results).__name__}")
+
     results = []
     for item in raw_results:
         dept_id = item.get("departmentId")
