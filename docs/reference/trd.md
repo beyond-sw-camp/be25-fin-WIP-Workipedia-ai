@@ -103,7 +103,7 @@ AI 서버는 RabbitMQ를 직접 구독하지 않는다. BE가 `ai_sync_jobs`를 
 
 5. **지식화 발행과 Vector Store 동기화**
    - TEAM_ADMIN 승인 트랜잭션에서 지식 문서와 `PENDING` 동기화 상태를 RDB에 저장
-   - RDB 커밋 후 비동기 작업이 마스킹, 청킹, 임베딩, Vector Store upsert 수행
+   - RDB 커밋 후 비동기 작업이 청킹, 임베딩, Vector Store upsert 수행
    - 성공 시 `SYNCED`, 실패 시 `FAILED`와 실패 사유 저장
    - 실패 건은 재시도할 수 있으며 RDB와 Vector Store를 하나의 로컬 트랜잭션으로 묶지 않음
 
