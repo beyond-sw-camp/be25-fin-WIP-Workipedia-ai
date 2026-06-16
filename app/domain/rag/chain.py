@@ -1,5 +1,5 @@
 import json
-from typing import Literal
+from typing import AsyncIterator, Literal
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
@@ -11,9 +11,48 @@ from app.common.exceptions import ProviderError, provider_call
 logger = logging.getLogger(__name__)
 from app.core.config import RERANK_SCORE_THRESHOLD
 from app.domain.chatbot.schemas import SessionMessage
-from app.domain.rag.prompt import build_context, build_system_prompt
+from app.domain.rag.prompt import build_answer_stream_prompt, build_context, build_system_prompt
 from app.domain.rag.schemas import GeneratedAnswer, RagResult, RagStatus, RerankedCandidate
 from app.infra.llm.factory import get_llm
+
+
+def _build_history_messages(session_context: list[SessionMessage] | None) -> list:
+    messages: list = []
+    for msg in (session_context or []):
+        if msg.sender_type == "USER":
+            messages.append(HumanMessage(content=msg.content))
+        else:
+            messages.append(AIMessage(content=msg.content))
+    return messages
+
+
+def _chunk_text(chunk) -> str:
+    """astream 청크에서 텍스트를 추출한다. 공백을 보존하기 위해 strip하지 않는다."""
+    content = chunk.content
+    if isinstance(content, list):
+        return "".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content)
+    return str(content) if content is not None else ""
+
+
+async def stream_answer(
+    query: str,
+    references: list[RerankedCandidate],
+    custom_prompt: str | None = None,
+    session_context: list[SessionMessage] | None = None,
+) -> AsyncIterator[str]:
+    """검증된 참조(references)만 근거로 평문 답변을 토큰 단위로 스트리밍한다.
+
+    cited 검증·폴백 판정은 stage 1(orchestrator)에서 끝났다고 가정한다.
+    """
+    messages = [
+        SystemMessage(content=build_answer_stream_prompt(custom_prompt)),
+        *_build_history_messages(session_context),
+        HumanMessage(content=f"[Context]\n{build_context(references)}\n\n[Question]\n{query}"),
+    ]
+    async for chunk in get_llm().astream(messages):
+        text = _chunk_text(chunk)
+        if text:
+            yield text
 
 
 class _LLMAnswerSchema(BaseModel):
@@ -63,16 +102,9 @@ class RagChain:
         if candidates[0].score < RERANK_SCORE_THRESHOLD:
             return RagResult(status=RagStatus.NO_RESULT)
 
-        history_messages = []
-        for msg in (session_context or []):
-            if msg.sender_type == "USER":
-                history_messages.append(HumanMessage(content=msg.content))
-            else:
-                history_messages.append(AIMessage(content=msg.content))
-
         messages = [
             SystemMessage(content=build_system_prompt(custom_prompt)),
-            *history_messages,
+            *_build_history_messages(session_context),
             HumanMessage(content=f"[Context]\n{build_context(candidates)}\n\n[Question]\n{query}"),
         ]
 

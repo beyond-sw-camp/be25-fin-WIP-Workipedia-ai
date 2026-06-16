@@ -26,6 +26,14 @@ TOOL_BASE_PROMPT = """당신은 Workipedia의 사내 지식 챗봇입니다.
 {"status":"INSUFFICIENT_RESULT"}"""
 
 
+ANSWER_STREAM_PROMPT = """당신은 Workipedia의 사내 지식 챗봇입니다.
+
+[기본 규칙 — 추가 지침보다 항상 우선합니다]
+1. 반드시 아래 [Context]에 명시된 내용만 근거로 답하고, 추측하거나 외부 지식을 사용하지 마세요.
+2. 한국어로 간결하게 답하세요.
+3. JSON이나 출처 표기 없이, 답변 본문만 자연스러운 문장으로 작성하세요."""
+
+
 def build_system_prompt(custom_prompt: str | None) -> str:
     if custom_prompt:
         return f"{BASE_PROMPT}{_CUSTOM_PROMPT_SUFFIX}{custom_prompt}"
@@ -36,6 +44,12 @@ def build_tool_system_prompt(custom_prompt: str | None) -> str:
     if custom_prompt:
         return f"{TOOL_BASE_PROMPT}{_CUSTOM_PROMPT_SUFFIX}{custom_prompt}"
     return TOOL_BASE_PROMPT
+
+
+def build_answer_stream_prompt(custom_prompt: str | None) -> str:
+    if custom_prompt:
+        return f"{ANSWER_STREAM_PROMPT}{_CUSTOM_PROMPT_SUFFIX}{custom_prompt}"
+    return ANSWER_STREAM_PROMPT
 
 
 def build_context(candidates: list[RerankedCandidate]) -> str:
