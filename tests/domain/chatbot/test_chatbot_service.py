@@ -3,7 +3,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.domain.chatbot.schemas import ChatRequest, SessionMessage
-from app.domain.rag.schemas import OrchestratorResult, RagStatus
+from app.domain.chatbot.stream import DoneEvent, TokenEvent
+from app.domain.rag.schemas import GeneratedAnswer, OrchestratorResult, RagStatus, StepRecord
 
 
 def test_session_message_valid():
@@ -67,13 +68,172 @@ async def test_ask_delegates_to_orchestrator(service):
 async def test_ask_passes_question_unchanged(service):
     expected = OrchestratorResult(status=RagStatus.NO_RESULT, action="CREATE_TICKET", step_history=[])
     with patch("app.domain.chatbot.service.masker") as mock_masker, \
-         patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch:
+         patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.no_result_policy") as mock_policy:
         mock_masker.mask.side_effect = lambda x: x
         mock_orch.run = AsyncMock(return_value=expected)
+        mock_policy.decide.return_value.intent = "WORK_SUPPORT"
         result = await service.ask("특수한 질문?!@")
     call_kwargs = mock_orch.run.call_args.kwargs
     assert call_kwargs["query"] == "특수한 질문?!@"
     assert result.action == "CREATE_TICKET"
+
+
+@pytest.mark.asyncio
+async def test_general_question_no_result_returns_chat_without_ticket(service):
+    expected = OrchestratorResult(status=RagStatus.NO_RESULT, action="CREATE_TICKET", step_history=[])
+
+    with patch("app.domain.chatbot.service.masker") as mock_masker, \
+         patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.no_result_policy") as mock_policy:
+        mock_masker.mask.side_effect = lambda x: x
+        mock_orch.run = AsyncMock(return_value=expected)
+        mock_policy.decide.return_value.intent = "GENERAL_CHAT"
+        mock_policy.decide.return_value.answer = "사과는 과일이거나 미안함을 전하는 행동입니다."
+
+        result = await service.ask("사과가 뭐야?")
+
+    mock_policy.decide.assert_called_once_with("사과가 뭐야?")
+    assert result.status == RagStatus.SUCCESS
+    assert result.route == "CHAT"
+    assert result.action is None
+    assert isinstance(result.answer, GeneratedAnswer)
+    assert result.answer.answer == "사과는 과일이거나 미안함을 전하는 행동입니다."
+    assert result.answer.references == []
+
+
+@pytest.mark.asyncio
+async def test_document_candidate_no_result_does_not_use_general_fallback(service):
+    expected = OrchestratorResult(
+        status=RagStatus.NO_RESULT,
+        action="CREATE_TICKET",
+        step_history=[
+            StepRecord(
+                step="A",
+                status=RagStatus.NO_RESULT,
+                retrieval_top_score=0.63,
+                retrieval_candidate_count=20,
+            )
+        ],
+    )
+
+    with patch("app.domain.chatbot.service.masker") as mock_masker, \
+         patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.no_result_policy") as mock_policy:
+        mock_masker.mask.side_effect = lambda x: x
+        mock_orch.run = AsyncMock(return_value=expected)
+        mock_policy.decide.return_value.intent = "GENERAL_CHAT"
+        mock_policy.decide.return_value.answer = "한화비전은 방산 회사입니다."
+
+        result = await service.ask("한화비전은 어떤 회사야?")
+
+    assert result.status == RagStatus.SUCCESS
+    assert result.route == "CHAT"
+    assert "문서에서 관련 후보는 찾았지만" in result.answer.answer
+    assert result.answer.references == []
+
+
+@pytest.mark.asyncio
+async def test_work_support_no_result_keeps_create_ticket(service):
+    expected = OrchestratorResult(status=RagStatus.NO_RESULT, action="CREATE_TICKET", step_history=[])
+
+    with patch("app.domain.chatbot.service.masker") as mock_masker, \
+         patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.no_result_policy") as mock_policy:
+        mock_masker.mask.side_effect = lambda x: x
+        mock_orch.run = AsyncMock(return_value=expected)
+        mock_policy.decide.return_value.intent = "WORK_SUPPORT"
+        mock_policy.decide.return_value.answer = None
+
+        result = await service.ask("권한 오류가 나요")
+
+    assert result.status == RagStatus.NO_RESULT
+    assert result.action == "CREATE_TICKET"
+
+
+@pytest.mark.asyncio
+async def test_successful_work_question_does_not_call_no_result_policy(service):
+    answer = GeneratedAnswer(answer="휴가는 HR 포털에서 신청합니다.", references=[])
+    expected = OrchestratorResult(status=RagStatus.SUCCESS, answer=answer, route="A", step_history=[])
+
+    with patch("app.domain.chatbot.service.masker") as mock_masker, \
+         patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.no_result_policy") as mock_policy:
+        mock_masker.mask.side_effect = lambda x: x
+        mock_orch.run = AsyncMock(return_value=expected)
+
+        result = await service.ask("휴가 신청 방법 알려줘")
+
+    mock_policy.decide.assert_not_called()
+    assert result.status == RagStatus.SUCCESS
+    assert result.route == "A"
+
+
+@pytest.mark.asyncio
+async def test_ticket_confirmation_yes_creates_ticket_without_rag(service):
+    context = [
+        _msg(1, "USER", "전사 휴일은 언제야?"),
+        _msg(2, "ASSISTANT", "관련 문서를 찾지 못했어요. 티켓으로 문의할까요?"),
+    ]
+
+    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch:
+        result = await service.ask("응", session_context=context)
+
+    mock_orch.run.assert_not_called()
+    assert result.status == RagStatus.SUCCESS
+    assert result.action == "CREATE_TICKET"
+    assert result.answer.answer == "좋아요. 티켓을 발행할게요."
+
+
+@pytest.mark.asyncio
+async def test_ticket_confirmation_no_cancels_without_rag(service):
+    context = [
+        _msg(1, "USER", "전사 휴일은 언제야?"),
+        _msg(2, "ASSISTANT", "관련 문서를 찾지 못했어요. 티켓으로 문의할까요?"),
+    ]
+
+    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch:
+        result = await service.ask("아니", session_context=context)
+
+    mock_orch.run.assert_not_called()
+    assert result.status == RagStatus.SUCCESS
+    assert result.action is None
+    assert result.answer.answer == "알겠어요. 티켓은 발행하지 않을게요."
+
+
+@pytest.mark.asyncio
+async def test_ask_stream_applies_no_result_ticket_policy(service):
+    expected = OrchestratorResult(status=RagStatus.NO_RESULT, action="CREATE_TICKET", step_history=[])
+
+    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.no_result_policy") as mock_policy:
+        mock_orch.run = AsyncMock(return_value=expected)
+        mock_policy.decide.return_value.intent = "WORK_SUPPORT"
+        mock_policy.decide.return_value.answer = None
+
+        events = [event async for event in service.ask_stream("전사 휴일은 언제야?")]
+
+    assert isinstance(events[0], TokenEvent)
+    assert events[0].content == "관련 문서를 찾지 못했어요. 티켓으로 문의할까요?"
+    assert isinstance(events[-1], DoneEvent)
+    assert events[-1].action == "CREATE_TICKET"
+
+
+@pytest.mark.asyncio
+async def test_ask_stream_ticket_confirmation_yes_creates_ticket_without_rag(service):
+    context = [
+        _msg(1, "USER", "전사 휴일은 언제야?"),
+        _msg(2, "ASSISTANT", "관련 문서를 찾지 못했어요. 티켓으로 문의할까요?"),
+    ]
+
+    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch:
+        events = [event async for event in service.ask_stream("응", session_context=context)]
+
+    mock_orch.run.assert_not_called()
+    assert isinstance(events[0], TokenEvent)
+    assert events[0].content == "좋아요. 티켓을 발행할게요."
+    assert isinstance(events[-1], DoneEvent)
+    assert events[-1].action == "CREATE_TICKET"
 
 
 # ── 새 파이프라인 테스트 ─────────────────────────────────────────────────────────

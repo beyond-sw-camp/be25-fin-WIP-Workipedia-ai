@@ -1,24 +1,136 @@
 import asyncio
 import logging
+import time
 from typing import AsyncIterator
 
 from app.common.exceptions import MaskingBlockedError, ProviderError
 from app.common.masking import StreamMasker, masker
 from app.core.config import STEP_TIMEOUT, settings
 from app.domain.chatbot.contextualizer import contextualize
+from app.domain.chatbot.no_result_policy import FALLBACK_DECISION, no_result_policy
 from app.domain.chatbot.schemas import SessionMessage
 from app.domain.chatbot.stream import DoneEvent, ErrorEvent, StreamEvent, TokenEvent
 from app.domain.rag import chain as rag_chain
 from app.domain.rag.orchestrator import rag_orchestrator
-from app.domain.rag.schemas import OrchestratorResult, RagStatus, StepRecord
+from app.domain.rag.schemas import GeneratedAnswer, OrchestratorResult, RagStatus, StepRecord
 
 logger = logging.getLogger(__name__)
 
 _ERROR_MESSAGE = "일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
 _BLOCKED_MESSAGE = "요청을 처리할 수 없습니다."
+_CREATE_TICKET_MESSAGE = "관련 문서를 찾지 못했어요. 티켓으로 문의할까요?"
+
+_TICKET_CONFIRM_PROMPTS = (
+    "티켓으로 문의할까요",
+    "티켓을 발행할까요",
+    "티켓으로 문의하시겠어요",
+)
+_AFFIRMATIVE_REPLIES = {
+    "ㅇ",
+    "ㅇㅇ",
+    "응",
+    "네",
+    "예",
+    "넵",
+    "좋아",
+    "그래",
+    "어",
+    "해주세요",
+    "해줘",
+    "발행해줘",
+    "문의해줘",
+    "티켓 발행해줘",
+}
+_NEGATIVE_REPLIES = {
+    "ㄴ",
+    "ㄴㄴ",
+    "아니",
+    "아니요",
+    "괜찮아",
+    "괜찮아요",
+    "취소",
+    "하지마",
+    "안해",
+}
+
+
+def _has_document_candidates(result: OrchestratorResult) -> bool:
+    for step in result.step_history:
+        if step.step in {"A", "B", "C"} and (step.retrieval_top_score or 0.0) >= settings.rag_retrieval_score_threshold:
+            return True
+    return False
+
+
+def _last_assistant_asked_ticket(context: list[SessionMessage]) -> bool:
+    for msg in reversed(context):
+        if msg.sender_type != "ASSISTANT":
+            continue
+        return any(prompt in msg.content for prompt in _TICKET_CONFIRM_PROMPTS)
+    return False
+
+
+def _normalize_reply(text: str) -> str:
+    return text.strip().lower().rstrip(".!！?？~")
+
+
+def _resolve_ticket_confirmation(question: str, context: list[SessionMessage]) -> OrchestratorResult | None:
+    if not _last_assistant_asked_ticket(context):
+        return None
+
+    normalized = _normalize_reply(question)
+    if normalized in _AFFIRMATIVE_REPLIES:
+        return OrchestratorResult(
+            status=RagStatus.SUCCESS,
+            answer=GeneratedAnswer(answer="좋아요. 티켓을 발행할게요.", references=[]),
+            route="CHAT",
+            action="CREATE_TICKET",
+        )
+    if normalized in _NEGATIVE_REPLIES:
+        return OrchestratorResult(
+            status=RagStatus.SUCCESS,
+            answer=GeneratedAnswer(answer="알겠어요. 티켓은 발행하지 않을게요.", references=[]),
+            route="CHAT",
+        )
+    return None
 
 
 class ChatbotService:
+    async def _apply_no_result_policy(self, question: str, result: OrchestratorResult) -> OrchestratorResult:
+        if result.status != RagStatus.NO_RESULT or result.action != "CREATE_TICKET":
+            return result
+
+        started_at = time.perf_counter()
+        try:
+            decision = await asyncio.wait_for(
+                asyncio.to_thread(no_result_policy.decide, question),
+                timeout=settings.no_result_policy_timeout,
+            )
+        except asyncio.TimeoutError:
+            decision = FALLBACK_DECISION
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        logger.warning("no_result_policy intent=%s elapsed_ms=%.1f", decision.intent, elapsed_ms)
+
+        if decision.intent == "WORK_SUPPORT":
+            return result
+
+        if _has_document_candidates(result):
+            return OrchestratorResult(
+                status=RagStatus.SUCCESS,
+                answer=GeneratedAnswer(
+                    answer="문서에서 관련 후보는 찾았지만, 답변으로 확정할 만큼의 근거를 만들지 못했어요. 질문을 조금 더 구체적으로 바꿔 다시 물어봐 주세요.",
+                    references=[],
+                ),
+                route="CHAT",
+                step_history=result.step_history,
+            )
+
+        return OrchestratorResult(
+            status=RagStatus.SUCCESS,
+            answer=GeneratedAnswer(answer=decision.answer or "", references=[]),
+            route="CHAT",
+            step_history=result.step_history,
+        )
+
     async def _prepare(
         self,
         question: str,
@@ -57,6 +169,10 @@ class ChatbotService:
         custom_prompt: str | None = None,
         session_context: list[SessionMessage] | None = None,
     ) -> OrchestratorResult:
+        followup_result = _resolve_ticket_confirmation(question, session_context or [])
+        if followup_result is not None:
+            return followup_result
+
         retrieval_query, selected_context, context_record = await self._prepare(question, session_context)
 
         # Orchestrator
@@ -66,6 +182,9 @@ class ChatbotService:
             custom_prompt=custom_prompt,
             session_context=selected_context,
         )
+
+        # 검색/도구 결과가 없을 때만 티켓 오발행 방지 정책 적용
+        result = await self._apply_no_result_policy(question, result)
 
         # 출력 마스킹
         if result.answer is not None:
@@ -92,6 +211,17 @@ class ChatbotService:
         stage 2: A/B/C는 references만 근거로 답변을 재생성하여 토큰 단위로 스트리밍하고,
                  D(Tool)는 references가 없으므로 stage 1의 마스킹된 답변을 그대로 흘린다.
         """
+        followup_result = _resolve_ticket_confirmation(question, session_context or [])
+        if followup_result is not None:
+            if followup_result.answer and followup_result.answer.answer:
+                yield TokenEvent(content=followup_result.answer.answer)
+            yield DoneEvent(
+                route=followup_result.route,
+                action=followup_result.action,
+                step_history=followup_result.step_history,
+            )
+            return
+
         retrieval_query, selected_context, context_record = await self._prepare(question, session_context)
 
         result = await rag_orchestrator.run(
@@ -104,6 +234,9 @@ class ChatbotService:
         step_history = list(result.step_history)
         if context_record is not None:
             step_history.insert(0, context_record)
+        result.step_history = step_history
+        result = await self._apply_no_result_policy(question, result)
+        step_history = result.step_history
 
         if result.status == RagStatus.BLOCKED:
             yield ErrorEvent(message=_BLOCKED_MESSAGE)
@@ -113,6 +246,8 @@ class ChatbotService:
             return
         if result.status != RagStatus.SUCCESS or result.answer is None:
             # NO_RESULT 등 — 본문 없이 전환 액션·이력만 전달한다.
+            if result.action == "CREATE_TICKET":
+                yield TokenEvent(content=_CREATE_TICKET_MESSAGE)
             yield DoneEvent(route=result.route, action=result.action, step_history=step_history)
             return
 
@@ -152,7 +287,7 @@ class ChatbotService:
             if fallback:
                 yield TokenEvent(content=fallback)
 
-        yield DoneEvent(references=references, route=result.route, step_history=step_history)
+        yield DoneEvent(references=references, route=result.route, action=result.action, step_history=step_history)
 
 
 chatbot_service = ChatbotService()

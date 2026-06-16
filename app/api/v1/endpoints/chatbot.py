@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["chatbot"])
 
 _ERROR_MESSAGE = "일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+_CREATE_TICKET_MESSAGE = "관련 문서를 찾지 못했어요. 티켓으로 문의할까요?"
 
 _SSE_HEADERS = {
     "Cache-Control": "no-cache",
@@ -45,6 +46,16 @@ def _extract_chunk_index(raw: object, parts: list[str]) -> int | None:
     return None
 
 
+def _extract_positive_int(raw: object) -> int | None:
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except (ValueError, TypeError):
+        return None
+    return value if value > 0 else None
+
+
 def _to_source_item(ref) -> SourceItem:
     parts = ref.candidate_id.split(":", 2)
     parsed_source_type = parts[0] if len(parts) > 1 else ""
@@ -59,6 +70,8 @@ def _to_source_item(ref) -> SourceItem:
         source_type=source_type,
         source_id=source_id,
         chunk_index=chunk_index,
+        page_start=_extract_positive_int(ref.metadata.get("page_start") or ref.metadata.get("pageStart")),
+        page_end=_extract_positive_int(ref.metadata.get("page_end") or ref.metadata.get("pageEnd")),
         title=ref.metadata.get("title", ref.candidate_id),
         score=ref.score,
         link=ref.metadata.get("link"),
@@ -86,10 +99,12 @@ async def chat(request: ChatRequest) -> ChatResponse:
             answer=result.answer.answer,
             sources=sources,
             route=result.route,
+            action=result.action,
             step_history=_to_step_history(result.step_history),
         )
 
-    return ChatResponse(answer="", sources=[], route=None, action=result.action, step_history=_to_step_history(result.step_history))
+    answer = _CREATE_TICKET_MESSAGE if result.action == "CREATE_TICKET" else ""
+    return ChatResponse(answer=answer, sources=[], route=None, action=result.action, step_history=_to_step_history(result.step_history))
 
 
 def _format_sse(event: StreamEvent) -> str:

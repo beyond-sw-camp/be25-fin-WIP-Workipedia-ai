@@ -9,7 +9,7 @@ import logging
 from app.common.exceptions import ProviderError, provider_call
 
 logger = logging.getLogger(__name__)
-from app.core.config import RERANK_SCORE_THRESHOLD
+from app.core.config import LLMProvider, RERANK_SCORE_THRESHOLD, settings
 from app.domain.chatbot.schemas import SessionMessage
 from app.domain.rag.prompt import build_answer_stream_prompt, build_context, build_system_prompt
 from app.domain.rag.schemas import GeneratedAnswer, RagResult, RagStatus, RerankedCandidate
@@ -86,6 +86,29 @@ def _extract_text(response) -> str:
     return stripped
 
 
+def _extract_json_object(text: str) -> str:
+    stripped = text.strip()
+    if not stripped:
+        return stripped
+    if stripped.startswith("{") and stripped.endswith("}"):
+        return stripped
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start != -1 and end != -1 and start < end:
+        return stripped[start:end + 1]
+    return stripped
+
+
+def _get_json_llm():
+    model = get_llm(
+        request_timeout=settings.rag_answer_llm_timeout,
+        max_retries=0,
+    )
+    if settings.llm_provider == LLMProvider.OPENAI and model.__class__.__name__ == "ChatOpenAI":
+        return model.bind(response_format={"type": "json_object"})
+    return model
+
+
 class RagChain:
     def generate(
         self,
@@ -108,25 +131,18 @@ class RagChain:
             HumanMessage(content=f"[Context]\n{build_context(candidates)}\n\n[Question]\n{query}"),
         ]
 
-        parsed: _LLMAnswerSchema | None = None
-        last_error = ""
-        for attempt in range(2):
-            try:
-                with provider_call("llm"):
-                    response = get_llm().invoke(messages)
-                parsed = _LLMAnswerSchema.model_validate(json.loads(_extract_text(response)))
-                break
-            except ProviderError as e:
-                # 네트워크/API 오류 — infra가 이미 재시도했으므로 즉시 ERROR
-                return RagResult(status=RagStatus.ERROR, error_message=e.message)
-            except (json.JSONDecodeError, ValidationError) as e:
-                # JSON 파싱 또는 스키마 검증 실패 — 1회 재시도
-                last_error = str(e)
-                if attempt == 1:
-                    return RagResult(status=RagStatus.ERROR, error_message=last_error)
-
-        if parsed is None:
-            return RagResult(status=RagStatus.ERROR, error_message=last_error)
+        try:
+            with provider_call("llm"):
+                response = _get_json_llm().invoke(messages)
+            raw_text = _extract_text(response)
+            parsed = _LLMAnswerSchema.model_validate(json.loads(_extract_json_object(raw_text)))
+        except ProviderError as e:
+            return RagResult(status=RagStatus.ERROR, error_message=e.message)
+        except (json.JSONDecodeError, ValidationError) as e:
+            logger.warning("RAG LLM JSON parse failed: %s", e)
+            if "raw_text" in locals():
+                logger.warning("RAG LLM raw response preview: %r", raw_text[:500])
+            return RagResult(status=RagStatus.ERROR, error_message=str(e))
 
         logger.warning("LLM 응답: status=%s, cited_ids=%s", parsed.status, parsed.cited_ids)
 
