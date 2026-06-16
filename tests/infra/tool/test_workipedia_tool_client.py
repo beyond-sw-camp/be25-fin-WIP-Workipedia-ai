@@ -16,16 +16,21 @@ def _make_client(handler):
 
 # ── get_active_tools ──────────────────────────────────────────────────────────
 
-def test_get_active_tools_returns_tool_list():
+def test_get_active_tools_returns_tool_list(monkeypatch):
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "internal_api_key", "test-internal-api-key")
+
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
-        assert request.url.path == "/internal/ai-tools/active"
+        assert request.url.path == "/api/v1/internal/ai-tools/active"
+        assert request.headers["X-Internal-Api-Key"] == "test-internal-api-key"
         return httpx.Response(200, json=[
             {
-                "toolId": "tool_001",
+                "aiToolId": 1,
                 "name": "직원조회",
                 "description": "직원 정보를 조회한다",
-                "parametersSchema": {"type": "object", "properties": {"employee_id": {"type": "string"}}},
+                # BE는 parametersSchema를 JSON 컬럼이 아니라 문자열로 직렬화해서 내려준다.
+                "parametersSchema": json.dumps({"type": "object", "properties": {"employee_id": {"type": "string"}}}),
             }
         ])
 
@@ -34,8 +39,9 @@ def test_get_active_tools_returns_tool_list():
 
     assert len(tools) == 1
     assert isinstance(tools[0], ToolDefinition)
-    assert tools[0].tool_id == "tool_001"
+    assert tools[0].tool_id == "1"
     assert tools[0].name == "직원조회"
+    assert tools[0].parameters_schema == {"type": "object", "properties": {"employee_id": {"type": "string"}}}
 
 
 def test_get_active_tools_returns_empty_list():
@@ -80,9 +86,9 @@ def test_get_active_tools_raises_provider_error_on_malformed_response():
 def test_execute_sends_correct_request_and_returns_result():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
-        assert request.url.path == "/internal/ai-tools/tool_001/execute"
+        assert request.url.path == "/api/v1/internal/ai-tools/tool_001/execute"
         body = json.loads(request.content)
-        assert body == {"inputs": {"employee_id": "E001"}}
+        assert body == {"parameters": {"employee_id": "E001"}}
         return httpx.Response(200, json={"data": {"name": "홍길동", "dept": "개발팀"}})
 
     client = _make_client(handler)
