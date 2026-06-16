@@ -1,14 +1,11 @@
 from dataclasses import dataclass, field
 
 from app.core.config import (
-    RERANKER_MODEL,
     ROUTING_CASES_COLLECTION,
     ROUTING_DEPT_RR_COLLECTION,
     ROUTING_RERANK_TOP_K,
     ROUTING_RETRIEVAL_TOP_K,
-    settings,
 )
-from app.domain.rag.reranker.cross_encoder_reranker import get_reranker
 from app.domain.rag.retriever import rag_retriever
 from app.domain.rag.schemas import RagCandidate
 from app.domain.ticket_routing.schemas import (
@@ -18,6 +15,9 @@ from app.domain.ticket_routing.schemas import (
 )
 from app.common.exceptions import ProviderError, provider_call
 from app.infra.embedding.factory import get_embeddings
+
+ROUTING_MODEL = "embedding-similarity"
+ROUTING_PROVIDER = "qdrant"
 
 
 @dataclass
@@ -47,8 +47,8 @@ def _common_queue(reasons: list[str], candidates: list[CandidateDepartment]) -> 
         decision="COMMON_QUEUE",
         reasons=reasons,
         candidate_departments=candidates,
-        model=RERANKER_MODEL,
-        provider="cross-encoder",
+        model=ROUTING_MODEL,
+        provider=ROUTING_PROVIDER,
     )
 
 
@@ -92,63 +92,29 @@ class TicketRoutingService:
 
         top_depts = sorted(groups.values(), key=lambda g: g.max_score, reverse=True)[:ROUTING_RERANK_TOP_K]
 
-        dept_candidates = [
-            RagCandidate(
-                candidate_id=f"department-{g.department_id}",
-                text=g.build_context(),
-                score=g.max_score,
-                metadata={"department_id": g.department_id, "department_name": g.department_name},
+        candidate_list = [
+            CandidateDepartment(
+                department_id=g.department_id,
+                department_name=g.department_name,
+                confidence_score=g.max_score,
             )
             for g in top_depts
         ]
 
-        try:
-            reranked = get_reranker().rerank(
-                query=query,
-                candidates=dept_candidates,
-                top_k=len(dept_candidates),
-            )
-        except ProviderError:
-            return _common_queue(["Cross-Encoder 오류로 공통 접수 큐로 이동합니다."], [])
-
-        candidate_list = [
-            CandidateDepartment(
-                department_id=r.metadata["department_id"],
-                department_name=r.metadata["department_name"],
-                confidence_score=r.score,
-            )
-            for r in reranked
-        ]
-
-        if len(reranked) < 2:
+        if len(candidate_list) < 2:
             return _common_queue(["후보 부서가 1개뿐이어서 자동 배정하지 않습니다."], candidate_list)
 
-        top_score = reranked[0].score
-        score_margin = reranked[0].score - reranked[1].score
-
-        if top_score < settings.routing_score_threshold:
-            return _common_queue(
-                [f"1위 점수 {top_score:.2f}가 기준({settings.routing_score_threshold})에 미달합니다."],
-                candidate_list,
-            )
-
-        if score_margin < settings.routing_margin_threshold:
-            return _common_queue(
-                [f"1·2위 점수 차 {score_margin:.2f}가 기준({settings.routing_margin_threshold})에 미달합니다."],
-                candidate_list,
-            )
-
-        top = reranked[0]
+        score_margin = candidate_list[0].confidence_score - candidate_list[1].confidence_score
         return TicketRoutingResponse(
-            assigned_department_id=top.metadata["department_id"],
-            assigned_department_name=top.metadata["department_name"],
-            confidence_score=top_score,
+            assigned_department_id=None,
+            assigned_department_name=None,
+            confidence_score=candidate_list[0].confidence_score,
             score_margin=score_margin,
-            decision="AUTO_ASSIGNED",
-            reasons=[f"1위 점수 {top_score:.2f}, 1·2위 점수 차 {score_margin:.2f}로 자동 배정 기준 통과"],
+            decision="COMMON_QUEUE",
+            reasons=["자동 부서 배정은 사용하지 않고, 검색 점수 기반 후보만 제공합니다."],
             candidate_departments=candidate_list,
-            model=RERANKER_MODEL,
-            provider="cross-encoder",
+            model=ROUTING_MODEL,
+            provider=ROUTING_PROVIDER,
         )
 
 
