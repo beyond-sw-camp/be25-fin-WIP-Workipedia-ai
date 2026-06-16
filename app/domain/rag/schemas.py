@@ -38,6 +38,8 @@ class RagResult:
     status: RagStatus
     answer: GeneratedAnswer | None = None
     error_message: str | None = None
+    retrieval_top_score: float | None = None
+    retrieval_candidate_count: int = 0
 
 
 @dataclass
@@ -45,6 +47,8 @@ class StepRecord:
     step: str
     status: RagStatus
     error_message: str | None = None
+    retrieval_top_score: float | None = None
+    retrieval_candidate_count: int = 0
 
 
 @dataclass

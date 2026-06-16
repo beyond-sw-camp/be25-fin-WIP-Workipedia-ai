@@ -11,6 +11,28 @@ from app.infra.vector_store.qdrant_store import qdrant_store
 
 
 class DocumentService:
+    def _chunk_pages(
+        self,
+        pages,
+        chunk_size: int,
+        chunk_overlap: int,
+    ) -> list[dict]:
+        chunks: list[dict] = []
+
+        for page in pages:
+            page_text = page.text.strip()
+            if not page_text:
+                continue
+            for chunk in chunk_text(page_text, chunk_size=chunk_size, chunk_overlap=chunk_overlap):
+                if chunk.strip():
+                    chunks.append({
+                        "text": chunk.strip(),
+                        "page_start": page.page,
+                        "page_end": page.page,
+                    })
+
+        return chunks
+
     def index(self, request: DocumentIndexRequest) -> DocumentIndexResponse:
         """
         BE가 전달한 텍스트를 마스킹 → 청킹 → 임베딩 → Qdrant 저장한다.
@@ -31,22 +53,30 @@ class DocumentService:
 
         # source_type별 청킹 파라미터 적용 (MANUAL·MANUAL_KNOWLEDGE은 길게, WORKI는 짧게)
         chunk_kwargs = CHUNK_CONFIG.get(request.source_type, {})
-        chunks = chunk_text(request.text, **chunk_kwargs)
+        if request.pages:
+            page_chunks = self._chunk_pages(request.pages, **chunk_kwargs)
+            chunks = [chunk["text"] for chunk in page_chunks]
+        else:
+            page_chunks = []
+            chunks = chunk_text(request.text, **chunk_kwargs)
         if not chunks:
             raise WorkipediaException(status_code=422, message="청킹 결과가 없습니다.")
 
         # 각 청크에 고유 ID와 출처 메타데이터 부여 (RAG 검색 결과에서 출처 표시에 사용)
         chunk_ids = [f"{doc_id}:{i}" for i in range(len(chunks))]
-        metadatas = [
-            {
+        metadatas = []
+        for i in range(len(chunks)):
+            metadata = {
                 "doc_id": doc_id,
                 "source_type": request.source_type,
                 "source_id": request.source_id,
                 "title": request.title,
                 "chunk_index": i,
             }
-            for i in range(len(chunks))
-        ]
+            if page_chunks:
+                metadata["page_start"] = page_chunks[i]["page_start"]
+                metadata["page_end"] = page_chunks[i]["page_end"]
+            metadatas.append(metadata)
 
         # 임베딩 먼저 시도 — 실패하면 기존 청크를 그대로 유지하고 500 반환
         try:

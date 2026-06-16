@@ -125,7 +125,7 @@ def test_error_on_provider_error_no_retry(chain):
     assert mock_llm.return_value.invoke.call_count == 1
 
 
-def test_error_after_two_json_parse_failures(chain):
+def test_error_after_json_parse_failure_no_retry(chain):
     candidates = [_make_candidate("MANUAL:1:0", score=2.0)]
     bad_response = MagicMock()
     bad_response.content = "이건 JSON이 아님"
@@ -135,21 +135,7 @@ def test_error_after_two_json_parse_failures(chain):
         result = chain.generate("질문", candidates=candidates)
 
     assert result.status == RagStatus.ERROR
-    assert mock_llm.return_value.invoke.call_count == 2
-
-
-def test_success_on_second_attempt_after_parse_failure(chain):
-    candidates = [_make_candidate("MANUAL:1:0", score=2.0)]
-    bad_response = MagicMock()
-    bad_response.content = "이건 JSON이 아님"
-    good_response = _mock_llm_response("ANSWER", "답변", ["MANUAL:1:0"])
-
-    with patch("app.domain.rag.chain.get_llm") as mock_llm:
-        mock_llm.return_value.invoke.side_effect = [bad_response, good_response]
-        result = chain.generate("질문", candidates=candidates)
-
-    assert result.status == RagStatus.SUCCESS
-    assert mock_llm.return_value.invoke.call_count == 2
+    assert mock_llm.return_value.invoke.call_count == 1
 
 
 def test_error_when_answer_status_has_null_answer(chain):
@@ -159,7 +145,7 @@ def test_error_when_answer_status_has_null_answer(chain):
         result = chain.generate("질문", candidates=candidates)
 
     assert result.status == RagStatus.ERROR
-    assert mock_llm.return_value.invoke.call_count == 2
+    assert mock_llm.return_value.invoke.call_count == 1
 
 
 def test_error_when_answer_is_whitespace_only(chain):
@@ -169,3 +155,4 @@ def test_error_when_answer_is_whitespace_only(chain):
         result = chain.generate("질문", candidates=candidates)
 
     assert result.status == RagStatus.ERROR
+    assert mock_llm.return_value.invoke.call_count == 1

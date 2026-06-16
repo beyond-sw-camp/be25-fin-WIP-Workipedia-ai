@@ -1,4 +1,6 @@
 import asyncio
+import logging
+import time
 from typing import Protocol
 
 from app.common.exceptions import ProviderError
@@ -12,6 +14,8 @@ from app.domain.tool.selector import ToolSelector
 from app.domain.tool.service import ToolService
 from app.domain.tool.validator import InputValidator
 from app.infra.tool.factory import get_tool_client
+
+logger = logging.getLogger(__name__)
 
 
 class StepRunner(Protocol):
@@ -35,7 +39,10 @@ class ManualRagStep:
 
     def run(self, query: str, retrieval_query: str, custom_prompt: str | None, session_context: list[SessionMessage]) -> RagResult:
         candidates = self._service.search_and_rerank(retrieval_query, COLLECTION_MAP["MANUAL"])
-        return self._chain.generate(query, candidates, custom_prompt, session_context)
+        result = self._chain.generate(query, candidates, custom_prompt, session_context)
+        result.retrieval_top_score = self._service.last_retrieval_top_score
+        result.retrieval_candidate_count = self._service.last_retrieval_candidate_count
+        return result
 
 
 # ── B단계: 워키 RAG ───────────────────────────────────────────────────────────
@@ -50,7 +57,10 @@ class WorkiRagStep:
 
     def run(self, query: str, retrieval_query: str, custom_prompt: str | None, session_context: list[SessionMessage]) -> RagResult:
         candidates = self._service.search_and_rerank(retrieval_query, COLLECTION_MAP["WORKI"])
-        return self._chain.generate(query, candidates, custom_prompt, session_context)
+        result = self._chain.generate(query, candidates, custom_prompt, session_context)
+        result.retrieval_top_score = self._service.last_retrieval_top_score
+        result.retrieval_candidate_count = self._service.last_retrieval_candidate_count
+        return result
 
 
 # ── C단계: 지식 RAG ───────────────────────────────────────────────────────────
@@ -65,7 +75,10 @@ class KnowledgeRagStep:
 
     def run(self, query: str, retrieval_query: str, custom_prompt: str | None, session_context: list[SessionMessage]) -> RagResult:
         candidates = self._service.search_knowledge(retrieval_query)
-        return self._chain.generate(query, candidates, custom_prompt, session_context)
+        result = self._chain.generate(query, candidates, custom_prompt, session_context)
+        result.retrieval_top_score = self._service.last_retrieval_top_score
+        result.retrieval_candidate_count = self._service.last_retrieval_candidate_count
+        return result
 
 
 # ── D단계: Tool Calling ───────────────────────────────────────────────────────
@@ -108,21 +121,34 @@ class RagOrchestrator:
 
         history: list[StepRecord] = []
         for step in self._steps:
+            started_at = time.perf_counter()
             try:
                 result = await asyncio.wait_for(
                     asyncio.to_thread(step.run, query, retrieval_query, custom_prompt, session_context),
                     timeout=step.timeout,
                 )
             except asyncio.TimeoutError:
+                elapsed_ms = (time.perf_counter() - started_at) * 1000
+                logger.warning("rag step %s timeout after %.1fms", step.step_name, elapsed_ms)
                 history.append(StepRecord(step=step.step_name, status=RagStatus.ERROR, error_message="timeout"))
                 return OrchestratorResult(status=RagStatus.ERROR, step_history=history)
             except ProviderError as exc:
+                elapsed_ms = (time.perf_counter() - started_at) * 1000
+                logger.warning("rag step %s provider error after %.1fms: %s", step.step_name, elapsed_ms, exc.message)
                 history.append(StepRecord(step=step.step_name, status=RagStatus.ERROR, error_message=exc.message))
                 if step.step_name == "D":
                     return OrchestratorResult(status=RagStatus.ERROR, step_history=history)
                 continue
 
-            history.append(StepRecord(step=step.step_name, status=result.status, error_message=result.error_message))
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            logger.warning("rag step %s finished status=%s elapsed_ms=%.1f", step.step_name, result.status, elapsed_ms)
+            history.append(StepRecord(
+                step=step.step_name,
+                status=result.status,
+                error_message=result.error_message,
+                retrieval_top_score=result.retrieval_top_score,
+                retrieval_candidate_count=result.retrieval_candidate_count,
+            ))
 
             if result.status == RagStatus.SUCCESS:
                 return OrchestratorResult(

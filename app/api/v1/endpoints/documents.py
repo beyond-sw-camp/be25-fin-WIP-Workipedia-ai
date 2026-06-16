@@ -2,7 +2,7 @@ from typing import Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
-from app.domain.document.parser.factory import parse_upload_file
+from app.domain.document.parser.factory import parse_upload_file, parse_upload_pages
 from app.domain.document.schemas import (
     DocumentDeleteResponse,
     DocumentIndexRequest,
@@ -31,7 +31,12 @@ def ingest_document(
     - 500: 임베딩 실패
     """
     try:
-        text = parse_upload_file(file)
+        pages = parse_upload_pages(file)
+        if pages is None:
+            file.file.seek(0)
+            text = parse_upload_file(file)
+        else:
+            text = "\n".join(page["text"] for page in pages)
     except HTTPException:
         raise
     except Exception as e:
@@ -39,7 +44,13 @@ def ingest_document(
 
     try:
         return document_service.index(
-            DocumentIndexRequest(source_id=source_id, source_type=source_type, title=title, text=text)
+            DocumentIndexRequest(
+                source_id=source_id,
+                source_type=source_type,
+                title=title,
+                text=text,
+                pages=pages,
+            )
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))

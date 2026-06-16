@@ -87,15 +87,34 @@ def test_chat_create_ticket_action(client):
     orch_result = OrchestratorResult(status=RagStatus.NO_RESULT, action="CREATE_TICKET")
 
     with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
-         patch("app.domain.chatbot.service.masker") as mock_masker:
+         patch("app.domain.chatbot.service.masker") as mock_masker, \
+         patch("app.domain.chatbot.service.no_result_policy") as mock_policy:
         mock_masker.mask.side_effect = lambda x: x
         mock_orch.run = AsyncMock(return_value=orch_result)
+        mock_policy.decide.return_value.intent = "WORK_SUPPORT"
+        mock_policy.decide.return_value.answer = None
         response = client.post("/api/v1/chat", json={"question": "해결 안 되는 질문"})
 
     assert response.status_code == 200
     data = response.json()
     assert data["action"] == "CREATE_TICKET"
-    assert data["answer"] == ""
+    assert data["answer"] == "관련 문서를 찾지 못했어요. 티켓으로 문의할까요?"
+    assert data["sources"] == []
+
+
+def test_chat_ticket_confirmation_keeps_create_ticket_action(client):
+    response = client.post("/api/v1/chat", json={
+        "question": "응",
+        "sessionContext": [
+            {"messageId": 1, "senderType": "USER", "content": "전사 휴일은 언제야?"},
+            {"messageId": 2, "senderType": "ASSISTANT", "content": "관련 문서를 찾지 못했어요. 티켓으로 문의할까요?"},
+        ],
+    })
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["answer"] == "좋아요. 티켓을 발행할게요."
+    assert data["action"] == "CREATE_TICKET"
     assert data["sources"] == []
 
 
@@ -187,6 +206,36 @@ def test_chat_source_chunk_index_metadata_takes_priority(client):
 
     assert response.status_code == 200
     assert response.json()["sources"][0]["chunk_index"] == 0  # metadata 값 우선
+
+
+def test_chat_source_includes_page_range_metadata(client):
+    ref = RerankedCandidate(
+        candidate_id="MANUAL:42:9",
+        text="내용",
+        score=1.0,
+        rank=1,
+        metadata={
+            "source_type": "MANUAL",
+            "source_id": "42",
+            "chunk_index": 9,
+            "page_start": 20,
+            "page_end": 21,
+            "title": "LoRA.pdf",
+        },
+    )
+    answer = GeneratedAnswer(answer="답변", references=[ref])
+    orch_result = OrchestratorResult(status=RagStatus.SUCCESS, answer=answer, route="A")
+
+    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.masker") as mock_masker:
+        mock_masker.mask.side_effect = lambda x: x
+        mock_orch.run = AsyncMock(return_value=orch_result)
+        response = client.post("/api/v1/chat", json={"question": "질문"})
+
+    assert response.status_code == 200
+    source = response.json()["sources"][0]
+    assert source["page_start"] == 20
+    assert source["page_end"] == 21
 
 
 def test_chat_source_chunk_index_from_candidate_id_fallback(client):

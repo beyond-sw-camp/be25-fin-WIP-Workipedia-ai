@@ -39,6 +39,8 @@ class SourceItem(BaseModel):
     source_type: str
     source_id: str
     chunk_index: int | None = None
+    page_start: int | None = None
+    page_end: int | None = None
     title: str
     score: float
     link: str | None = None
