@@ -5,6 +5,7 @@ from app.core.config import (
     ROUTING_DEPT_RR_COLLECTION,
     ROUTING_RERANK_TOP_K,
     ROUTING_RETRIEVAL_TOP_K,
+    settings,
 )
 from app.domain.rag.retriever import rag_retriever
 from app.domain.rag.schemas import RagCandidate
@@ -104,14 +105,39 @@ class TicketRoutingService:
         if len(candidate_list) < 2:
             return _common_queue(["후보 부서가 1개뿐이어서 자동 배정하지 않습니다."], candidate_list)
 
-        score_margin = candidate_list[0].confidence_score - candidate_list[1].confidence_score
+        top_score = candidate_list[0].confidence_score
+        score_margin = top_score - candidate_list[1].confidence_score
+
+        score_ok = top_score >= settings.routing_score_threshold
+        margin_ok = score_margin >= settings.routing_margin_threshold
+
+        if score_ok and margin_ok:
+            top = top_depts[0]
+            return TicketRoutingResponse(
+                assigned_department_id=top.department_id,
+                assigned_department_name=top.department_name,
+                confidence_score=top_score,
+                score_margin=score_margin,
+                decision="ASSIGNED",
+                reasons=[f"유사도 점수({top_score:.3f})와 마진({score_margin:.3f})이 임계값을 초과해 자동 배정합니다."],
+                candidate_departments=candidate_list,
+                model=ROUTING_MODEL,
+                provider=ROUTING_PROVIDER,
+            )
+
+        reasons: list[str] = []
+        if not score_ok:
+            reasons.append(f"유사도 점수({top_score:.3f})가 임계값({settings.routing_score_threshold})에 미달합니다.")
+        if not margin_ok:
+            reasons.append(f"1·2위 점수 차이({score_margin:.3f})가 임계값({settings.routing_margin_threshold})에 미달합니다.")
+
         return TicketRoutingResponse(
             assigned_department_id=None,
             assigned_department_name=None,
-            confidence_score=candidate_list[0].confidence_score,
+            confidence_score=top_score,
             score_margin=score_margin,
             decision="COMMON_QUEUE",
-            reasons=["자동 부서 배정은 사용하지 않고, 검색 점수 기반 후보만 제공합니다."],
+            reasons=reasons,
             candidate_departments=candidate_list,
             model=ROUTING_MODEL,
             provider=ROUTING_PROVIDER,
