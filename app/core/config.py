@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     routing_score_threshold: float = 0.0
     routing_margin_threshold: float = 0.5
 
+    # RAG 단계별 latency 로깅 on/off
+    latency_log_enabled: bool = True
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 

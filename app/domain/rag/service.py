@@ -1,5 +1,7 @@
 import logging
+import time
 
+from app.common.request_context import get_request_id
 from app.core.config import COLLECTION_MAP, RERANK_TOP_K, settings
 from app.domain.rag.reranker.cross_encoder_reranker import get_reranker
 from app.domain.rag.retriever import rag_retriever
@@ -17,21 +19,10 @@ def _passes_retrieval_gate(collection_name: str, candidates) -> bool:
     threshold = settings.rag_retrieval_score_threshold
     if top_score is None:
         return False
-    if top_score < threshold:
-        logger.warning(
-            "[%s] retrieval_gate=SKIP top_score=%.4f threshold=%.4f",
-            collection_name,
-            top_score,
-            threshold,
-        )
-        return False
-    logger.warning(
-        "[%s] retrieval_gate=PASS top_score=%.4f threshold=%.4f",
-        collection_name,
-        top_score,
-        threshold,
-    )
-    return True
+    gate = "PASS" if top_score >= threshold else "SKIP"
+    logger.info("[latency] request_id=%s collection=%s retrieval_gate=%s top_score=%.4f threshold=%.4f",
+        get_request_id(), collection_name, gate, top_score, threshold)
+    return top_score >= threshold
 
 
 def _from_retrieval(candidates: list[RagCandidate], top_k: int) -> list[RerankedCandidate]:
@@ -63,46 +54,26 @@ class RagService:
         candidates = rag_retriever.search(query, collection_name)
         self.last_retrieval_candidate_count = len(candidates)
         self.last_retrieval_top_score = max((candidate.score for candidate in candidates), default=None)
-        logger.warning("[%s] retrieval_count=%d", collection_name, len(candidates))
+        if settings.latency_log_enabled:
+            logger.info("[latency] request_id=%s collection=%s retrieval_count=%d top3=%s",
+                get_request_id(), collection_name, len(candidates),
+                [{"rank": i+1, "score": round(c.score, 4), "text": _preview(c.text)} for i, c in enumerate(candidates[:3])])
         if not candidates:
             return []
-        logger.warning(
-            "[%s] retrieval_top3=%s",
-            collection_name,
-            [
-                {
-                    "rank": idx + 1,
-                    "score": round(candidate.score, 4),
-                    "id": candidate.candidate_id,
-                    "text": _preview(candidate.text),
-                }
-                for idx, candidate in enumerate(candidates[:3])
-            ],
-        )
         if not _passes_retrieval_gate(collection_name, candidates):
             return []
 
         if not settings.rag_reranker_enabled:
-            logger.warning("[%s] reranker=DISABLED using retrieval_top%d", collection_name, rerank_top_k)
+            logger.info("[latency] request_id=%s collection=%s reranker=DISABLED", get_request_id(), collection_name)
             return _from_retrieval(candidates, rerank_top_k)
 
         # 2단계: Cross-Encoder로 후보 재정렬 후 상위 rerank_top_k개 반환
+        _rerank_start = time.perf_counter()
         reranked = get_reranker().rerank(query, candidates, rerank_top_k)
-        if reranked:
-            logger.warning(
-                "[%s] rerank_top3=%s",
-                collection_name,
-                [
-                    {
-                        "rank": candidate.rank,
-                        "rerank_score": round(candidate.score, 4),
-                        "retrieval_score": round(candidate.retrieval_score, 4),
-                        "id": candidate.candidate_id,
-                        "text": _preview(candidate.text),
-                    }
-                    for candidate in reranked[:3]
-                ],
-            )
+        if settings.latency_log_enabled:
+            logger.info("[latency] request_id=%s collection=%s rerank_input=%d rerank_output=%d rerank_ms=%.1f top3=%s",
+                get_request_id(), collection_name, len(candidates), len(reranked), (time.perf_counter() - _rerank_start) * 1000,
+                [{"rank": c.rank, "rerank_score": round(c.score, 4), "retrieval_score": round(c.retrieval_score, 4), "text": _preview(c.text)} for c in reranked[:3]])
         return reranked
 
     def search_knowledge(
@@ -117,53 +88,22 @@ class RagService:
         merged = kd + mk
         self.last_retrieval_candidate_count = len(merged)
         self.last_retrieval_top_score = max((candidate.score for candidate in merged), default=None)
-        logger.warning(
-            "[knowledge] retrieval_counts=%s",
-            {
-                COLLECTION_MAP["KNOWLEDGE_DATA"]: len(kd),
-                COLLECTION_MAP["MANUAL_KNOWLEDGE"]: len(mk),
-            },
-        )
-        for collection_name, candidates in (
-            (COLLECTION_MAP["KNOWLEDGE_DATA"], kd),
-            (COLLECTION_MAP["MANUAL_KNOWLEDGE"], mk),
-        ):
-            if candidates:
-                logger.warning(
-                    "[%s] retrieval_top3=%s",
-                    collection_name,
-                    [
-                        {
-                            "rank": idx + 1,
-                            "score": round(candidate.score, 4),
-                            "id": candidate.candidate_id,
-                            "text": _preview(candidate.text),
-                        }
-                        for idx, candidate in enumerate(candidates[:3])
-                    ],
-                )
+        if settings.latency_log_enabled:
+            logger.info("[latency] request_id=%s collection=knowledge retrieval_counts=%s",
+                get_request_id(), {COLLECTION_MAP["KNOWLEDGE_DATA"]: len(kd), COLLECTION_MAP["MANUAL_KNOWLEDGE"]: len(mk)})
         if not merged:
             return []
         if not _passes_retrieval_gate("knowledge", merged):
             return []
 
         if not settings.rag_reranker_enabled:
-            logger.warning("[knowledge] reranker=DISABLED using retrieval_top%d", rerank_top_k)
+            logger.info("[latency] request_id=%s collection=knowledge reranker=DISABLED", get_request_id())
             return _from_retrieval(merged, rerank_top_k)
 
+        _rerank_start = time.perf_counter()
         reranked = get_reranker().rerank(query, merged, rerank_top_k)
-        if reranked:
-            logger.warning(
-                "[knowledge] rerank_top3=%s",
-                [
-                    {
-                        "rank": candidate.rank,
-                        "rerank_score": round(candidate.score, 4),
-                        "retrieval_score": round(candidate.retrieval_score, 4),
-                        "id": candidate.candidate_id,
-                        "text": _preview(candidate.text),
-                    }
-                    for candidate in reranked[:3]
-                ],
-            )
+        if settings.latency_log_enabled:
+            logger.info("[latency] request_id=%s collection=knowledge rerank_input=%d rerank_output=%d rerank_ms=%.1f top3=%s",
+                get_request_id(), len(merged), len(reranked), (time.perf_counter() - _rerank_start) * 1000,
+                [{"rank": c.rank, "rerank_score": round(c.score, 4), "retrieval_score": round(c.retrieval_score, 4), "text": _preview(c.text)} for c in reranked[:3]])
         return reranked

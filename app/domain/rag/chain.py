@@ -1,12 +1,13 @@
 import json
+import logging
+import time
 from typing import AsyncIterator, Literal
 
-from pydantic import BaseModel, Field, ValidationError, model_validator
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-
-import logging
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.common.exceptions import ProviderError, provider_call
+from app.common.request_context import get_request_id
 
 logger = logging.getLogger(__name__)
 from app.core.config import LLMProvider, RERANK_SCORE_THRESHOLD, settings
@@ -132,8 +133,12 @@ class RagChain:
         ]
 
         try:
+            _chain_start = time.perf_counter()
             with provider_call("llm"):
                 response = _get_json_llm().invoke(messages)
+            if settings.latency_log_enabled:
+                logger.info("[latency] request_id=%s llm_provider=%s chain_ms=%.1f",
+                    get_request_id(), settings.llm_provider.value, (time.perf_counter() - _chain_start) * 1000)
             raw_text = _extract_text(response)
             parsed = _LLMAnswerSchema.model_validate(json.loads(_extract_json_object(raw_text)))
         except ProviderError as e:

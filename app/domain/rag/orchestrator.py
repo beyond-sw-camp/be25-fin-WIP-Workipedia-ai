@@ -4,7 +4,8 @@ import time
 from typing import Protocol
 
 from app.common.exceptions import ProviderError
-from app.core.config import COLLECTION_MAP, STEP_TIMEOUT
+from app.common.request_context import get_request_id
+from app.core.config import COLLECTION_MAP, STEP_TIMEOUT, settings
 from app.domain.chatbot.schemas import SessionMessage
 from app.domain.rag.chain import RagChain
 from app.domain.rag.schemas import OrchestratorResult, RagResult, RagStatus, StepRecord
@@ -129,19 +130,20 @@ class RagOrchestrator:
                 )
             except asyncio.TimeoutError:
                 elapsed_ms = (time.perf_counter() - started_at) * 1000
-                logger.warning("rag step %s timeout after %.1fms", step.step_name, elapsed_ms)
+                logger.warning("[latency] request_id=%s step=%s status=TIMEOUT elapsed_ms=%.1f", get_request_id(), step.step_name, elapsed_ms)
                 history.append(StepRecord(step=step.step_name, status=RagStatus.ERROR, error_message="timeout"))
                 return OrchestratorResult(status=RagStatus.ERROR, step_history=history)
             except ProviderError as exc:
                 elapsed_ms = (time.perf_counter() - started_at) * 1000
-                logger.warning("rag step %s provider error after %.1fms: %s", step.step_name, elapsed_ms, exc.message)
+                logger.warning("[latency] request_id=%s step=%s status=ERROR elapsed_ms=%.1f error=%s", get_request_id(), step.step_name, elapsed_ms, exc.message)
                 history.append(StepRecord(step=step.step_name, status=RagStatus.ERROR, error_message=exc.message))
                 if step.step_name == "D":
                     return OrchestratorResult(status=RagStatus.ERROR, step_history=history)
                 continue
 
             elapsed_ms = (time.perf_counter() - started_at) * 1000
-            logger.warning("rag step %s finished status=%s elapsed_ms=%.1f", step.step_name, result.status, elapsed_ms)
+            if settings.latency_log_enabled:
+                logger.info("[latency] request_id=%s step=%s status=%s elapsed_ms=%.1f", get_request_id(), step.step_name, result.status.value, elapsed_ms)
             history.append(StepRecord(
                 step=step.step_name,
                 status=result.status,

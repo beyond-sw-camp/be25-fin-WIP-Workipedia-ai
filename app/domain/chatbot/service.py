@@ -5,6 +5,7 @@ from typing import AsyncIterator
 
 from app.common.exceptions import MaskingBlockedError, ProviderError
 from app.common.masking import StreamMasker, masker
+from app.common.request_context import get_request_id
 from app.core.config import STEP_TIMEOUT, settings
 from app.domain.chatbot.contextualizer import contextualize
 from app.domain.chatbot.no_result_policy import FALLBACK_DECISION, no_result_policy
@@ -151,10 +152,13 @@ class ChatbotService:
             retrieval_query = question
         else:
             try:
+                _ctx_start = time.perf_counter()
                 retrieval_query = await asyncio.wait_for(
                     asyncio.to_thread(contextualize, question, selected_context),
                     timeout=STEP_TIMEOUT["CONTEXT"],
                 )
+                if settings.latency_log_enabled:
+                    logger.info("[latency] request_id=%s contextualize_ms=%.1f", get_request_id(), (time.perf_counter() - _ctx_start) * 1000)
             except (ProviderError, asyncio.TimeoutError) as exc:
                 msg = exc.message if isinstance(exc, ProviderError) else "timeout"
                 context_record = StepRecord(step="CONTEXT", status=RagStatus.ERROR, error_message=msg)
