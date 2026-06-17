@@ -4,6 +4,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
+from app.common.request_context import set_request_id
 from app.domain.chatbot.schemas import ChatRequest, ChatResponse, SourceItem, StepHistoryItem
 from app.domain.chatbot.service import chatbot_service
 from app.domain.chatbot.stream import DoneEvent, ErrorEvent, StreamEvent, TokenEvent
@@ -80,6 +81,7 @@ def _to_source_item(ref) -> SourceItem:
 
 @router.post("", response_model=ChatResponse)
 async def chat(request: ChatRequest) -> ChatResponse:
+    set_request_id()
     result = await chatbot_service.ask(
         request.question,
         custom_prompt=request.custom_prompt,
@@ -126,6 +128,8 @@ def _format_sse(event: StreamEvent) -> str:
 
 @router.post("/stream")
 async def chat_stream(request: ChatRequest) -> StreamingResponse:
+    set_request_id()
+
     async def event_gen():
         try:
             async for event in chatbot_service.ask_stream(
