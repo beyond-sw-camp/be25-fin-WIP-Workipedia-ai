@@ -103,10 +103,10 @@ def ingest_text(
 @router.delete("/{source_id}", response_model=DocumentDeleteResponse)
 def delete_document(
     source_id: int,
-    source_type: Literal["MANUAL"] = Query(...),
+    source_type: Literal["MANUAL", "WORKI", "KNOWLEDGE_DATA", "MANUAL_KNOWLEDGE"] = Query(...),
 ) -> DocumentDeleteResponse:
     """
-    source_id에 해당하는 Qdrant 청크를 전부 삭제한다. MANUAL source_type만 허용한다.
+    source_id에 해당하는 Qdrant 청크를 전부 삭제한다.
 
     쿼리 파라미터: source_type (필수)
     에러:
