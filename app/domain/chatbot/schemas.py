@@ -43,7 +43,6 @@ class SourceItem(BaseModel):
     page_end: int | None = None
     title: str
     score: float
-    link: str | None = None
 
 
 class StepHistoryItem(BaseModel):
