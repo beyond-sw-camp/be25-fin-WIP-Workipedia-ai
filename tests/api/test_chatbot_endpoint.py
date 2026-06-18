@@ -302,3 +302,156 @@ def test_chat_source_chunk_index_none_when_not_parseable(client):
 
     assert response.status_code == 200
     assert response.json()["sources"][0]["chunk_index"] is None
+
+
+def test_chat_source_candidate_id_fallback_used_when_metadata_missing(client):
+    """metadata에 source_type/source_id가 없으면 candidate_id 파싱 fallback으로 정상 반환한다."""
+    ref = RerankedCandidate(
+        candidate_id="MANUAL:42:0",  # 파싱 가능
+        text="내용",
+        score=1.0,
+        rank=1,
+        metadata={},  # metadata 비어 있음
+    )
+    answer = GeneratedAnswer(answer="답변", references=[ref])
+    orch_result = OrchestratorResult(status=RagStatus.SUCCESS, answer=answer, route="A")
+
+    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.masker") as mock_masker:
+        mock_masker.mask.side_effect = lambda x: x
+        mock_orch.run = AsyncMock(return_value=orch_result)
+        response = client.post("/api/v1/chat", json={"question": "질문"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["sources"]) == 1
+    assert data["sources"][0]["source_type"] == "MANUAL"
+    assert data["sources"][0]["source_id"] == "42"
+
+
+def test_chat_source_skipped_when_both_metadata_and_candidate_id_unparseable(client):
+    """metadata도 비어 있고 candidate_id도 파싱 불가능하면 해당 source는 제외되고 500은 발생하지 않는다."""
+    bad_ref = RerankedCandidate(
+        candidate_id="opaque-id",  # : 구분자 없음
+        text="내용",
+        score=1.0,
+        rank=1,
+        metadata={},  # metadata도 비어 있음
+    )
+    good_ref = RerankedCandidate(
+        candidate_id="MANUAL:42:0",
+        text="정상 내용",
+        score=0.9,
+        rank=2,
+        metadata={"source_type": "MANUAL", "source_id": "42", "chunk_index": 0, "title": "휴가 규정"},
+    )
+    answer = GeneratedAnswer(answer="답변", references=[bad_ref, good_ref])
+    orch_result = OrchestratorResult(status=RagStatus.SUCCESS, answer=answer, route="A")
+
+    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.masker") as mock_masker:
+        mock_masker.mask.side_effect = lambda x: x
+        mock_orch.run = AsyncMock(return_value=orch_result)
+        response = client.post("/api/v1/chat", json={"question": "질문"})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["sources"]) == 1
+    assert data["sources"][0]["source_type"] == "MANUAL"
+
+
+@pytest.mark.parametrize("source_type,source_id", [
+    ("MANUAL", "10"),
+    ("WORKI", "20"),
+    ("KNOWLEDGE_DATA", "30"),
+    ("MANUAL_KNOWLEDGE", "40"),
+])
+def test_chat_all_source_types_returned(client, source_type, source_id):
+    """4가지 source_type 모두 sources에 포함된다."""
+    ref = RerankedCandidate(
+        candidate_id=f"{source_type}:{source_id}:0",
+        text="내용",
+        score=1.0,
+        rank=1,
+        metadata={
+            "source_type": source_type,
+            "source_id": source_id,
+            "chunk_index": 0,
+            "title": f"{source_type} 문서",
+        },
+    )
+    answer = GeneratedAnswer(answer="답변", references=[ref])
+    orch_result = OrchestratorResult(status=RagStatus.SUCCESS, answer=answer, route="A")
+
+    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.masker") as mock_masker:
+        mock_masker.mask.side_effect = lambda x: x
+        mock_orch.run = AsyncMock(return_value=orch_result)
+        response = client.post("/api/v1/chat", json={"question": "질문"})
+
+    assert response.status_code == 200
+    source = response.json()["sources"][0]
+    assert source["source_type"] == source_type
+    assert source["source_id"] == source_id
+    assert source["chunk_index"] == 0
+    assert source["title"] == f"{source_type} 문서"
+
+
+def test_chat_source_id_int_in_metadata_converted_to_str(client):
+    """metadata의 source_id가 int로 저장되어도 str로 변환된다."""
+    ref = RerankedCandidate(
+        candidate_id="MANUAL:99:0",
+        text="내용",
+        score=1.0,
+        rank=1,
+        metadata={
+            "source_type": "MANUAL",
+            "source_id": 99,  # int
+            "chunk_index": 0,
+            "title": "테스트 문서",
+        },
+    )
+    answer = GeneratedAnswer(answer="답변", references=[ref])
+    orch_result = OrchestratorResult(status=RagStatus.SUCCESS, answer=answer, route="A")
+
+    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.masker") as mock_masker:
+        mock_masker.mask.side_effect = lambda x: x
+        mock_orch.run = AsyncMock(return_value=orch_result)
+        response = client.post("/api/v1/chat", json={"question": "질문"})
+
+    assert response.status_code == 200
+    assert response.json()["sources"][0]["source_id"] == "99"
+
+
+def test_chat_source_fields_from_metadata_only(client):
+    """candidate_id 파싱 없이 metadata만으로 모든 출처 필드가 채워진다."""
+    ref = RerankedCandidate(
+        candidate_id="opaque-id",  # 파싱 불가능한 ID, metadata로만 동작
+        text="내용",
+        score=0.95,
+        rank=1,
+        metadata={
+            "source_type": "WORKI",
+            "source_id": "77",
+            "chunk_index": 3,
+            "title": "워키 게시글",
+        },
+    )
+    answer = GeneratedAnswer(answer="답변", references=[ref])
+    orch_result = OrchestratorResult(status=RagStatus.SUCCESS, answer=answer, route="B")
+
+    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.masker") as mock_masker:
+        mock_masker.mask.side_effect = lambda x: x
+        mock_orch.run = AsyncMock(return_value=orch_result)
+        response = client.post("/api/v1/chat", json={"question": "질문"})
+
+    assert response.status_code == 200
+    source = response.json()["sources"][0]
+    assert source["source_type"] == "WORKI"
+    assert source["source_id"] == "77"
+    assert source["chunk_index"] == 3
+    assert source["title"] == "워키 게시글"
+    assert source["page_start"] is None
+    assert source["page_end"] is None

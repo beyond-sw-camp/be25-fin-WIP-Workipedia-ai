@@ -75,7 +75,6 @@ def _to_source_item(ref) -> SourceItem:
         page_end=_extract_positive_int(ref.metadata.get("page_end") or ref.metadata.get("pageEnd")),
         title=ref.metadata.get("title", ref.candidate_id),
         score=ref.score,
-        link=ref.metadata.get("link"),
     )
 
 
@@ -96,7 +95,12 @@ async def chat(request: ChatRequest) -> ChatResponse:
         return ChatResponse(answer=_ERROR_MESSAGE, sources=[], route=None, step_history=_to_step_history(result.step_history))
 
     if result.status == RagStatus.SUCCESS and result.answer:
-        sources = [_to_source_item(ref) for ref in result.answer.references]
+        sources = []
+        for ref in result.answer.references:
+            try:
+                sources.append(_to_source_item(ref))
+            except ValueError as e:
+                logger.warning("출처 변환 실패, sources에서 제외: %s", e)
         return ChatResponse(
             answer=result.answer.answer,
             sources=sources,
@@ -114,11 +118,17 @@ def _format_sse(event: StreamEvent) -> str:
     if isinstance(event, TokenEvent):
         payload = {"type": "token", "content": event.content}
     elif isinstance(event, DoneEvent):
+        sources_list = []
+        for ref in event.references:
+            try:
+                sources_list.append(_to_source_item(ref).model_dump())
+            except ValueError as e:
+                logger.warning("출처 변환 실패, sources에서 제외: %s", e)
         payload = {
             "type": "done",
             "route": event.route,
             "action": event.action,
-            "sources": [_to_source_item(ref).model_dump() for ref in event.references],
+            "sources": sources_list,
             "step_history": [item.model_dump() for item in _to_step_history(event.step_history)],
         }
     else:  # ErrorEvent
