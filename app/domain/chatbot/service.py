@@ -8,7 +8,7 @@ from app.common.masking import StreamMasker, masker
 from app.common.request_context import get_request_id
 from app.core.config import STEP_TIMEOUT, settings
 from app.domain.chatbot.contextualizer import contextualize
-from app.domain.chatbot.no_result_policy import FALLBACK_DECISION, no_result_policy
+from app.domain.chatbot.no_result_policy import FALLBACK_DECISION, no_result_policy, should_precheck_general_chat
 from app.domain.chatbot.schemas import SessionMessage
 from app.domain.chatbot.stream import DoneEvent, ErrorEvent, StreamEvent, TokenEvent
 from app.domain.rag import chain as rag_chain
@@ -54,7 +54,6 @@ _NEGATIVE_REPLIES = {
     "안해",
 }
 
-
 def _has_document_candidates(result: OrchestratorResult) -> bool:
     for step in result.step_history:
         if step.step in {"A", "B", "C"} and (step.retrieval_top_score or 0.0) >= settings.rag_retrieval_score_threshold:
@@ -96,6 +95,29 @@ def _resolve_ticket_confirmation(question: str, context: list[SessionMessage]) -
 
 
 class ChatbotService:
+    async def _resolve_general_chat(self, question: str) -> OrchestratorResult | None:
+        if not should_precheck_general_chat(question):
+            return None
+
+        started_at = time.perf_counter()
+        try:
+            decision = await asyncio.wait_for(
+                asyncio.to_thread(no_result_policy.decide, question),
+                timeout=settings.no_result_policy_timeout,
+            )
+        except asyncio.TimeoutError:
+            decision = FALLBACK_DECISION
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        logger.warning("no_result_policy precheck_intent=%s elapsed_ms=%.1f", decision.intent, elapsed_ms)
+
+        if decision.intent != "GENERAL_CHAT":
+            return None
+        return OrchestratorResult(
+            status=RagStatus.SUCCESS,
+            answer=GeneratedAnswer(answer=decision.answer or "", references=[]),
+            route="CHAT",
+        )
+
     async def _apply_no_result_policy(self, question: str, result: OrchestratorResult) -> OrchestratorResult:
         if result.status != RagStatus.NO_RESULT or result.action != "CREATE_TICKET":
             return result
@@ -177,6 +199,15 @@ class ChatbotService:
         if followup_result is not None:
             return followup_result
 
+        general_chat_result = await self._resolve_general_chat(question)
+        if general_chat_result is not None:
+            if general_chat_result.answer is not None:
+                try:
+                    general_chat_result.answer.answer = masker.mask(general_chat_result.answer.answer)
+                except MaskingBlockedError:
+                    return OrchestratorResult(status=RagStatus.BLOCKED, step_history=general_chat_result.step_history)
+            return general_chat_result
+
         retrieval_query, selected_context, context_record = await self._prepare(question, session_context)
 
         # Orchestrator
@@ -224,6 +255,18 @@ class ChatbotService:
                 action=followup_result.action,
                 step_history=followup_result.step_history,
             )
+            return
+
+        general_chat_result = await self._resolve_general_chat(question)
+        if general_chat_result is not None:
+            try:
+                answer = masker.mask(general_chat_result.answer.answer if general_chat_result.answer else "")
+            except MaskingBlockedError:
+                yield ErrorEvent(message=_BLOCKED_MESSAGE)
+                return
+            if answer:
+                yield TokenEvent(content=answer)
+            yield DoneEvent(route=general_chat_result.route, step_history=general_chat_result.step_history)
             return
 
         retrieval_query, selected_context, context_record = await self._prepare(question, session_context)
