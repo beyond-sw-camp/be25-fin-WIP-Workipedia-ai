@@ -14,6 +14,19 @@ def _preview(text: str, limit: int = 80) -> str:
     return text.replace("\n", " ")[:limit]
 
 
+def _log_top_cosine(collection_name: str, candidates: list[RagCandidate]) -> None:
+    top = max(candidates, key=lambda candidate: candidate.score, default=None)
+    logger.warning(
+        "[rag_retrieval] request_id=%s collection=%s candidate_count=%d top_cosine=%s top_candidate_id=%s top_text=%s",
+        get_request_id(),
+        collection_name,
+        len(candidates),
+        None if top is None else round(top.score, 4),
+        None if top is None else top.candidate_id,
+        None if top is None else _preview(top.text),
+    )
+
+
 def _passes_retrieval_gate(collection_name: str, candidates) -> bool:
     top_score = max((candidate.score for candidate in candidates), default=None)
     threshold = settings.rag_retrieval_score_threshold
@@ -54,6 +67,7 @@ class RagService:
         candidates = rag_retriever.search(query, collection_name)
         self.last_retrieval_candidate_count = len(candidates)
         self.last_retrieval_top_score = max((candidate.score for candidate in candidates), default=None)
+        _log_top_cosine(collection_name, candidates)
         if settings.latency_log_enabled:
             logger.info("[latency] request_id=%s collection=%s retrieval_count=%d top3=%s",
                 get_request_id(), collection_name, len(candidates),
@@ -88,6 +102,9 @@ class RagService:
         merged = kd + mk
         self.last_retrieval_candidate_count = len(merged)
         self.last_retrieval_top_score = max((candidate.score for candidate in merged), default=None)
+        _log_top_cosine(COLLECTION_MAP["KNOWLEDGE_DATA"], kd)
+        _log_top_cosine(COLLECTION_MAP["MANUAL_KNOWLEDGE"], mk)
+        _log_top_cosine("knowledge", merged)
         if settings.latency_log_enabled:
             logger.info("[latency] request_id=%s collection=knowledge retrieval_counts=%s",
                 get_request_id(), {COLLECTION_MAP["KNOWLEDGE_DATA"]: len(kd), COLLECTION_MAP["MANUAL_KNOWLEDGE"]: len(mk)})

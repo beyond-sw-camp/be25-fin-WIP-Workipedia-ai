@@ -103,6 +103,41 @@ async def test_general_question_no_result_returns_chat_without_ticket(service):
 
 
 @pytest.mark.asyncio
+async def test_general_question_short_circuits_before_rag(service):
+    with patch("app.domain.chatbot.service.masker") as mock_masker, \
+         patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.no_result_policy") as mock_policy:
+        mock_masker.mask.side_effect = lambda x: x
+        mock_policy.decide.return_value.intent = "GENERAL_CHAT"
+        mock_policy.decide.return_value.answer = "저는 Workipedia 챗봇입니다."
+
+        result = await service.ask("넌 이름이 뭐야?")
+
+    mock_orch.run.assert_not_called()
+    mock_policy.decide.assert_called_once_with("넌 이름이 뭐야?")
+    assert result.status == RagStatus.SUCCESS
+    assert result.route == "CHAT"
+    assert result.answer.answer == "저는 Workipedia 챗봇입니다."
+
+
+@pytest.mark.asyncio
+async def test_work_question_does_not_use_general_short_circuit(service):
+    expected = OrchestratorResult(status=RagStatus.SUCCESS, answer=GeneratedAnswer(answer="권한은 관리자에게 요청하세요.", references=[]), route="A")
+
+    with patch("app.domain.chatbot.service.masker") as mock_masker, \
+         patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.no_result_policy") as mock_policy:
+        mock_masker.mask.side_effect = lambda x: x
+        mock_orch.run = AsyncMock(return_value=expected)
+
+        result = await service.ask("권한 오류가 뭐야?")
+
+    mock_policy.decide.assert_not_called()
+    mock_orch.run.assert_called_once()
+    assert result.route == "A"
+
+
+@pytest.mark.asyncio
 async def test_document_candidate_no_result_does_not_use_general_fallback(service):
     expected = OrchestratorResult(
         status=RagStatus.NO_RESULT,
@@ -234,6 +269,24 @@ async def test_ask_stream_ticket_confirmation_yes_creates_ticket_without_rag(ser
     assert events[0].content == "좋아요. 티켓을 발행할게요."
     assert isinstance(events[-1], DoneEvent)
     assert events[-1].action == "CREATE_TICKET"
+
+
+@pytest.mark.asyncio
+async def test_ask_stream_general_question_short_circuits_before_rag(service):
+    with patch("app.domain.chatbot.service.masker") as mock_masker, \
+         patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.no_result_policy") as mock_policy:
+        mock_masker.mask.side_effect = lambda x: x
+        mock_policy.decide.return_value.intent = "GENERAL_CHAT"
+        mock_policy.decide.return_value.answer = "안녕하세요. 무엇을 도와드릴까요?"
+
+        events = [event async for event in service.ask_stream("안녕")]
+
+    mock_orch.run.assert_not_called()
+    assert isinstance(events[0], TokenEvent)
+    assert events[0].content == "안녕하세요. 무엇을 도와드릴까요?"
+    assert isinstance(events[-1], DoneEvent)
+    assert events[-1].route == "CHAT"
 
 
 # ── 새 파이프라인 테스트 ─────────────────────────────────────────────────────────

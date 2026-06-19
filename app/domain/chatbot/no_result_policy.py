@@ -49,6 +49,60 @@ FALLBACK_DECISION = NoResultDecision(
     answer="업무 관련 질문이라면 어떤 상황에서 문제가 생겼는지 조금 더 구체적으로 알려주세요.",
 )
 
+_GENERAL_CHAT_PRECHECK_EXACT = {
+    "안녕",
+    "안녕하세요",
+    "하이",
+    "hello",
+    "hi",
+}
+_GENERAL_CHAT_PRECHECK_HINTS = (
+    "누구야",
+    "이름이 뭐",
+    "이름 뭐",
+)
+_WORK_SUPPORT_PRECHECK_KEYWORDS = (
+    "계정",
+    "권한",
+    "오류",
+    "에러",
+    "장애",
+    "신청",
+    "승인",
+    "휴가",
+    "연차",
+    "근태",
+    "복지",
+    "규정",
+    "회의실",
+    "라운지",
+    "좌석",
+    "출입",
+    "티켓",
+    "담당",
+    "부서",
+    "문서",
+    "매뉴얼",
+)
+
+
+def _normalize_question(text: str) -> str:
+    return text.strip().lower().rstrip(".!！?？~")
+
+
+def should_precheck_general_chat(question: str) -> bool:
+    """GENERAL_CHAT 조기 분기를 위해 정책 LLM을 먼저 호출할지 정한다.
+
+    이 함수는 최종 intent 판정기가 아니라 비용 절감용 후보 필터다.
+    최종 GENERAL_CHAT/WORK_SUPPORT/AMBIGUOUS 판정은 NoResultPolicy.decide가 한다.
+    """
+    normalized = _normalize_question(question)
+    if normalized in _GENERAL_CHAT_PRECHECK_EXACT:
+        return True
+    if any(keyword in normalized for keyword in _WORK_SUPPORT_PRECHECK_KEYWORDS):
+        return False
+    return any(hint in normalized for hint in _GENERAL_CHAT_PRECHECK_HINTS)
+
 
 def _extract_text(response) -> str:
     content = response.content

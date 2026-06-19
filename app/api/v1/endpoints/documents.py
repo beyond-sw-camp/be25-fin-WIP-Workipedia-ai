@@ -72,13 +72,14 @@ def ingest_document(
 @router.post("/ingest-text", response_model=DocumentIndexResponse)
 def ingest_text(
     source_id: int = Body(..., gt=0),
-    source_type: Literal["WORKI", "KNOWLEDGE_DATA", "MANUAL_KNOWLEDGE"] = Body(...),
+    source_type: Literal["MANUAL", "WORKI", "KNOWLEDGE_DATA", "MANUAL_KNOWLEDGE"] = Body(...),
     title: str = Body(..., min_length=1),
     text: str = Body(...),
 ) -> DocumentIndexResponse:
     """
-    텍스트를 직접 전달해 인덱싱한다. WORKI, KNOWLEDGE_DATA, MANUAL_KNOWLEDGE에 사용한다.
+    텍스트를 직접 전달해 인덱싱한다. MANUAL(txt/docx), WORKI, KNOWLEDGE_DATA, MANUAL_KNOWLEDGE에 사용한다.
     파일 업로드 없이 BE가 직접 텍스트를 전달하는 경로다.
+    MANUAL은 txt/docx 기반이며 page_start/page_end는 null로 저장된다.
 
     에러:
     - 422: 빈 텍스트 또는 지원하지 않는 source_type

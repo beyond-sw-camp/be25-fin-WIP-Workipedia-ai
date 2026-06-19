@@ -11,8 +11,8 @@
 | `source_type` | string | O | 출처 타입. 아래 가능 값 참고 |
 | `source_id` | string | O | 원본 도메인의 ID. Qdrant에 int로 저장된 경우도 string으로 변환 |
 | `chunk_index` | int? | - | chunk 순번. 없으면 `null` |
-| `page_start` | int? | - | PDF 기반 MANUAL chunk의 시작 페이지. 없으면 `null` |
-| `page_end` | int? | - | PDF 기반 MANUAL chunk의 끝 페이지. 없으면 `null` |
+| `page_start` | int? | - | PDF 기반 MANUAL chunk의 시작 페이지. txt/docx MANUAL 또는 비해당 타입이면 `null` |
+| `page_end` | int? | - | PDF 기반 MANUAL chunk의 끝 페이지. txt/docx MANUAL 또는 비해당 타입이면 `null` |
 | `title` | string | O | 원본 문서 제목 |
 | `score` | float | O | rerank 점수 |
 

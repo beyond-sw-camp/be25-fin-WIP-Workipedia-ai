@@ -121,6 +121,7 @@ class RagOrchestrator:
             session_context = []
 
         history: list[StepRecord] = []
+        orchestrator_started_at = time.perf_counter()
         for step in self._steps:
             started_at = time.perf_counter()
             try:
@@ -142,6 +143,15 @@ class RagOrchestrator:
                 continue
 
             elapsed_ms = (time.perf_counter() - started_at) * 1000
+            logger.info(
+                "[rag_route] request_id=%s step=%s status=%s route=%s action=%s elapsed_ms=%.1f",
+                get_request_id(),
+                step.step_name,
+                result.status.value,
+                step.step_name if result.status == RagStatus.SUCCESS else None,
+                None,
+                elapsed_ms,
+            )
             if settings.latency_log_enabled:
                 logger.info("[latency] request_id=%s step=%s status=%s elapsed_ms=%.1f", get_request_id(), step.step_name, result.status.value, elapsed_ms)
             history.append(StepRecord(
@@ -165,6 +175,15 @@ class RagOrchestrator:
                 return OrchestratorResult(status=RagStatus.ERROR, step_history=history)
             # NO_RESULT (또는 A/B/C의 ERROR) → 다음 단계로 계속
 
+        logger.info(
+            "[rag_route] request_id=%s step=%s status=%s route=%s action=%s elapsed_ms=%.1f",
+            get_request_id(),
+            "-",
+            RagStatus.NO_RESULT.value,
+            None,
+            "CREATE_TICKET",
+            (time.perf_counter() - orchestrator_started_at) * 1000,
+        )
         return OrchestratorResult(status=RagStatus.NO_RESULT, step_history=history, action="CREATE_TICKET")
 
 
