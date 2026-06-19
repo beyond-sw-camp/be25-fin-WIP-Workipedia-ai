@@ -70,12 +70,12 @@ class ToolService:
             )
         except ToolValidationError as exc:
             logger.warning(
-                "[tool_calling] validation=BLOCKED tool_id=%s reason=%s elapsed_ms=%.1f",
+                "[tool_calling] validation=NO_RESULT tool_id=%s reason=%s elapsed_ms=%.1f",
                 selection.tool_id,
                 exc.reason,
                 (time.perf_counter() - validate_started_at) * 1000,
             )
-            return RagResult(status=RagStatus.BLOCKED)
+            return RagResult(status=RagStatus.NO_RESULT)
 
         execute_started_at = time.perf_counter()
         raw = self._client.execute(selection.tool_id, validated_inputs)  # ProviderError → 상위 전파

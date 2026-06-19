@@ -68,6 +68,23 @@ def test_search_and_rerank_returns_empty_when_no_candidates(service):
     mock_reranker.rerank.assert_not_called()
 
 
+def test_search_and_rerank_logs_top_cosine(service, caplog):
+    candidates = _make_candidates(2)
+    mock_reranker = MagicMock()
+
+    with (
+        patch("app.domain.rag.service.rag_retriever") as mock_retriever,
+        patch("app.domain.rag.service.get_reranker", return_value=mock_reranker),
+        caplog.at_level("INFO", logger="app.domain.rag.service"),
+    ):
+        mock_retriever.search.return_value = candidates
+        service.search_and_rerank("질문", "manual_chunks")
+
+    assert "collection=manual_chunks" in caplog.text
+    assert "top_cosine=0.9" in caplog.text
+    assert "top_candidate_id=MANUAL:1:0" in caplog.text
+
+
 def test_search_and_rerank_skips_reranker_when_retrieval_score_low(service):
     from app.core.config import settings
 
