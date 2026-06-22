@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.domain.document.schemas import DocumentIndexRequest
+from app.domain.document.schemas import DocumentIndexRequest, DocumentPage
 from app.domain.document.service import DocumentService
 
 
@@ -31,6 +31,60 @@ def test_index_returns_chunk_count(service):
     assert result.indexed_chunks >= 1
     mock_store.delete_by_doc_id.assert_called_once()
     mock_store.upsert.assert_called_once()
+
+
+def test_index_pdf_pages_stores_page_range_metadata(service):
+    request = DocumentIndexRequest(
+        source_id=1,
+        source_type="MANUAL",
+        title="PDF 문서",
+        text="1페이지 내용 " * 80 + "2페이지 내용 " * 80,
+        pages=[
+            DocumentPage(page=1, text="1페이지 내용 " * 80),
+            DocumentPage(page=2, text="2페이지 내용 " * 80),
+        ],
+    )
+    with (
+        patch("app.domain.document.service.embed_texts") as mock_embed,
+        patch("app.domain.document.service.qdrant_store") as mock_store,
+    ):
+        mock_embed.side_effect = lambda chunks: [[0.1] * 768] * len(chunks)
+        mock_store.delete_by_doc_id.return_value = 0
+
+        service.index(request)
+
+    metadatas = mock_store.upsert.call_args.kwargs["metadatas"]
+    assert all("page_start" in meta for meta in metadatas)
+    assert all("page_end" in meta for meta in metadatas)
+    assert metadatas[0]["page_start"] == 1
+    assert metadatas[-1]["page_end"] == 2
+
+
+def test_index_pdf_pages_split_long_page_by_chunk_size(service):
+    request = DocumentIndexRequest(
+        source_id=1,
+        source_type="MANUAL",
+        title="PDF 문서",
+        text="긴 페이지 내용 " * 200,
+        pages=[
+            DocumentPage(page=1, text="긴 페이지 내용 " * 200),
+        ],
+    )
+    with (
+        patch("app.domain.document.service.embed_texts") as mock_embed,
+        patch("app.domain.document.service.qdrant_store") as mock_store,
+    ):
+        mock_embed.side_effect = lambda chunks: [[0.1] * 768] * len(chunks)
+        mock_store.delete_by_doc_id.return_value = 0
+
+        service.index(request)
+
+    documents = mock_store.upsert.call_args.kwargs["documents"]
+    metadatas = mock_store.upsert.call_args.kwargs["metadatas"]
+    assert len(documents) > 1
+    assert all(len(document) <= 500 for document in documents)
+    assert all(meta["page_start"] == 1 for meta in metadatas)
+    assert all(meta["page_end"] == 1 for meta in metadatas)
 
 
 def test_index_embed_first_then_delete(service):

@@ -1,7 +1,5 @@
 import pytest
 
-import jsonschema
-
 from app.common.exceptions import ProviderError, ToolValidationError
 from app.domain.tool.schemas import ToolSelection
 from tests.domain.tool.conftest import make_tool
@@ -40,13 +38,13 @@ def test_blocked_when_extra_param_included(validator):
 
 def test_blocked_when_required_param_missing(validator):
     sel = _make_sel(inputs={})
-    with pytest.raises(ToolValidationError, match="스키마 검증 실패"):
+    with pytest.raises(ToolValidationError, match="필수 파라미터가 없습니다"):
         validator.validate(sel, _def_map())
 
 
 def test_blocked_when_param_wrong_type(validator):
     sel = _make_sel(inputs={"employee_id": 12345})
-    with pytest.raises(ToolValidationError, match="스키마 검증 실패"):
+    with pytest.raises(ToolValidationError, match="파라미터 타입이 올바르지 않습니다"):
         validator.validate(sel, _def_map())
 
 
@@ -56,11 +54,40 @@ def test_returns_inputs_when_valid(validator):
     assert result == {"employee_id": "E001"}
 
 
-def test_provider_error_when_schema_is_invalid(validator):
-    """BE가 잘못된 JSON Schema를 반환한 경우 → ProviderError (BLOCKED 아님)."""
-    broken_schema_tool = make_tool(
-        parameters_schema={"type": "INVALID_TYPE", "properties": {"x": {"type": "string"}}}
+def test_allows_be_simplified_schema_required_flag(validator):
+    tool = make_tool(
+        parameters_schema={
+            "properties": {
+                "departmentName": {"type": "string", "required": True},
+            },
+        },
     )
-    sel = _make_sel(inputs={"x": "value"})
+    sel = _make_sel(inputs={"departmentName": "인사팀"})
+
+    result = validator.validate(sel, {"tool_001": tool})
+
+    assert result == {"departmentName": "인사팀"}
+
+
+def test_blocks_missing_required_param_from_be_simplified_schema(validator):
+    tool = make_tool(
+        parameters_schema={
+            "properties": {
+                "departmentName": {"type": "string", "required": True},
+            },
+        },
+    )
+    sel = _make_sel(inputs={})
+
+    with pytest.raises(ToolValidationError, match="필수 파라미터가 없습니다: departmentName"):
+        validator.validate(sel, {"tool_001": tool})
+
+
+def test_provider_error_when_schema_shape_is_invalid(validator):
+    """BE가 잘못된 스키마 구조를 반환한 경우 → ProviderError (BLOCKED 아님)."""
+    broken_schema_tool = make_tool(
+        parameters_schema={"properties": []}
+    )
+    sel = _make_sel(inputs={})
     with pytest.raises(ProviderError, match="Tool 스키마 오류"):
         validator.validate(sel, {"tool_001": broken_schema_tool})

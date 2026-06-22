@@ -61,14 +61,14 @@ def test_no_result_when_selector_returns_none():
     assert result.status == RagStatus.NO_RESULT
 
 
-def test_blocked_when_validator_raises():
+def test_no_result_when_validator_raises():
     svc = _make_service(
         tools=[make_tool()],
         selector_result=ToolSelection(tool_id="tool_001", inputs={"x": "y"}),
         validator_raises=ToolValidationError("허용되지 않은 파라미터: ['x']"),
     )
     result = svc.run("질문", retrieval_query="질문", custom_prompt=None)
-    assert result.status == RagStatus.BLOCKED
+    assert result.status == RagStatus.NO_RESULT
 
 
 def test_no_result_when_execute_returns_empty_dict():

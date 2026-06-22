@@ -437,9 +437,10 @@ class SourceItem(BaseModel):
     source_type: str
     source_id: str
     chunk_index: int | None = None
+    page_start: int | None = None
+    page_end: int | None = None
     title: str
     score: float
-    link: str | None = None
 
 class ChatResponse(BaseModel):
     answer: str
@@ -454,12 +455,27 @@ class ChatResponse(BaseModel):
 - `senderType=SYSTEM`, 공백 질문, 공백 메시지 내용은 `422`다.
 - `customPrompt`는 일반 사용자가 직접 작성하는 값이 아니라 신뢰된 BE가 활성 SYSTEM_ADMIN 설정을 전달하는 내부 계약이다.
 - 실제 검색에 전달하지 않는 `top_k`도 요청에서 받지 않는다.
-- 출처의 `source_type`, `source_id`, `chunk_index`는 Qdrant metadata를 정본으로 사용하고 `candidate_id` 파싱은 fallback으로만 사용한다. metadata 값이 변환 불가이거나 음수이면 `candidate_id` 파싱으로 재시도하고, 둘 다 실패하면 `null`을 반환한다.
-- AI는 인용된 chunk 식별 정보만 반환한다. `manual_citations` 저장, 답변 단위 중복 방지와 FAQ 인기 매뉴얼 캐시 무효화는 BE가 담당한다.
-- 출처 식별값이 없으면 빈 출처를 반환하지 않고 오류로 처리한다.
+- 출처의 `source_type`, `source_id`, `chunk_index`, `title`, `page_start`, `page_end`는 Qdrant metadata를 정본으로 사용하고 `candidate_id` 파싱은 fallback으로만 사용한다. metadata 값이 변환 불가이거나 음수이면 `candidate_id` 파싱으로 재시도하고, 둘 다 실패하면 nullable 필드는 `null`을 반환한다.
+- AI는 최종 답변에 실제 사용된 출처 식별 정보만 반환한다. `rag_citations` 저장, 중복 제거/집계 정책과 FAQ 인기 매뉴얼 캐시 무효화는 BE가 담당한다.
+- `source_type`/`source_id`가 metadata와 `candidate_id` 파싱 모두에서 확인 불가능한 source는 응답에서 제외하고 warning 로그를 남긴다.
 - `BLOCKED`는 고정 안전 응답, `NO_RESULT + CREATE_TICKET`은 티켓 전환 안내를 반환한다.
 - `ERROR`는 근거 없음으로 위장하지 않고 일시적 오류와 재시도를 안내하는 별도 응답으로 변환한다.
 - contextualize의 예상 가능한 실패는 원본 질문 fallback 후 `CONTEXT/ERROR` 이력을 포함한 정상 처리로 이어진다.
+
+### 스트리밍 endpoint (SSE)
+
+토큰 단위 실시간 응답이 필요한 경우 `POST /api/v1/chat/stream`을 사용한다. 요청 스키마는 `ChatRequest`로 동일하고, 응답은 `text/event-stream`이다.
+
+- **2단계 구조**다. 폴백·cited 검증·마스킹 계약을 깨지 않기 위해 토큰을 흘리기 전에 판정을 끝낸다.
+  - **stage 1 (비스트리밍)**: 기존 오케스트레이터를 그대로 돌려 `SUCCESS`·`route`·검증된 `references`를 확정한다. cited_ids 환각 검증과 폴백 단계 선택이 여기서 끝난다.
+  - **stage 2 (스트리밍)**: A/B/C는 확정된 `references`만 근거로 평문 답변(`build_answer_stream_prompt`)을 새 LLM 호출(`get_llm().astream()`)로 재생성해 토큰을 흘린다. 성공 경로에서 LLM을 2회 호출한다.
+- **D(Tool)는 references가 없으므로** stage 1에서 만든 마스킹된 답변을 그대로 단일 토큰으로 전달한다.
+- **출력 마스킹은 `StreamMasker`로 토큰 스트림에 적용**한다. 민감정보 패턴이 청크 경계에 걸쳐 분리될 수 있으므로, 패턴 최대 길이 이상(`_LOOKBACK`)의 꼬리를 버퍼에 남겨두고 경계에 패턴이 걸치지 않을 때만 flush한다. 비스트리밍 `POST /api/v1/chat`의 전체 텍스트 마스킹과 결과가 동일하다.
+- SSE 프레임은 `data: {json}\n\n` 형식이며 이벤트 `type`은 셋이다.
+  - `token`: `{"type":"token","content":"..."}` — 마스킹된 답변 본문 조각
+  - `done`: `{"type":"done","route","action","sources","step_history"}` — 정상 종료. `NO_RESULT`도 본문 토큰 없이 `done`으로 종료하며 `action=CREATE_TICKET`을 포함한다.
+  - `error`: `{"type":"error","message":"..."}` — `ERROR`는 일시적 오류 메시지, `BLOCKED`는 고정 안전 메시지
+- 필드명·snake_case 규칙과 출처 파싱은 비스트리밍 endpoint와 동일하다.
 
 ## 완료 기준
 
@@ -481,7 +497,8 @@ class ChatResponse(BaseModel):
 - `RagChain`, 구조화 답변 스키마, 기본/custom prompt, 인용 검증과 관련 단위 테스트가 구현되어 있다.
 - LLM 파싱 실패 1회 재시도와 provider 오류의 즉시 `ERROR` 변환이 구현되어 있다.
 - `RagOrchestrator`, `ChatbotService`, `/api/v1/chat` 연결과 endpoint 상태 변환이 구현되어 있다.
-- `SourceItem.chunk_index` 응답과 Qdrant metadata 우선·`candidate_id` fallback 변환이 구현되어 BE의 매뉴얼 인용 이력 저장과 연동할 수 있다.
+- `ChatbotService.ask_stream`, `StreamMasker`, 평문 답변 스트리밍 프롬프트, `/api/v1/chat/stream` SSE endpoint와 관련 단위 테스트가 구현되어 있다.
+- `SourceItem.chunk_index`, `page_start`, `page_end` 응답과 Qdrant metadata 우선·`candidate_id` fallback 변환이 구현되어 BE의 `rag_citations` 인용 이력 저장과 연동할 수 있다.
 - 세션 컨텍스트 요청 계약, history-aware retrieval query 분리와 contextualize timeout 설계가 확정되어 구현 중이다.
 - D단계 Tool Calling 설계와 구현 계획은 `docs/domain-guides/tool-integration.md`에 통합되어 있다. Tool domain 컴포넌트는 구현 중이며 `ToolCallingStep` 연결과 BE HTTP adapter는 남아 있다.
 - 실제 Qdrant 통합 테스트, `doc_id` payload index, scroll pagination은 남아 있다.

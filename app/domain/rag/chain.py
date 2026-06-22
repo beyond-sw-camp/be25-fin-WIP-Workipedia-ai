@@ -1,19 +1,59 @@
 import json
-from typing import Literal
-
-from pydantic import BaseModel, Field, ValidationError, model_validator
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-
 import logging
+import time
+from typing import AsyncIterator, Literal
+
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.common.exceptions import ProviderError, provider_call
+from app.common.request_context import get_request_id
 
 logger = logging.getLogger(__name__)
-from app.core.config import RERANK_SCORE_THRESHOLD
+from app.core.config import LLMProvider, RERANK_SCORE_THRESHOLD, settings
 from app.domain.chatbot.schemas import SessionMessage
-from app.domain.rag.prompt import build_context, build_system_prompt
+from app.domain.rag.prompt import build_answer_stream_prompt, build_context, build_system_prompt
 from app.domain.rag.schemas import GeneratedAnswer, RagResult, RagStatus, RerankedCandidate
 from app.infra.llm.factory import get_llm
+
+
+def _build_history_messages(session_context: list[SessionMessage] | None) -> list:
+    messages: list = []
+    for msg in (session_context or []):
+        if msg.sender_type == "USER":
+            messages.append(HumanMessage(content=msg.content))
+        else:
+            messages.append(AIMessage(content=msg.content))
+    return messages
+
+
+def _chunk_text(chunk) -> str:
+    """astream 청크에서 텍스트를 추출한다. 공백을 보존하기 위해 strip하지 않는다."""
+    content = chunk.content
+    if isinstance(content, list):
+        return "".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content)
+    return str(content) if content is not None else ""
+
+
+async def stream_answer(
+    query: str,
+    references: list[RerankedCandidate],
+    custom_prompt: str | None = None,
+    session_context: list[SessionMessage] | None = None,
+) -> AsyncIterator[str]:
+    """검증된 참조(references)만 근거로 평문 답변을 토큰 단위로 스트리밍한다.
+
+    cited 검증·폴백 판정은 stage 1(orchestrator)에서 끝났다고 가정한다.
+    """
+    messages = [
+        SystemMessage(content=build_answer_stream_prompt(custom_prompt)),
+        *_build_history_messages(session_context),
+        HumanMessage(content=f"[Context]\n{build_context(references)}\n\n[Question]\n{query}"),
+    ]
+    async for chunk in get_llm().astream(messages):
+        text = _chunk_text(chunk)
+        if text:
+            yield text
 
 
 class _LLMAnswerSchema(BaseModel):
@@ -47,6 +87,29 @@ def _extract_text(response) -> str:
     return stripped
 
 
+def _extract_json_object(text: str) -> str:
+    stripped = text.strip()
+    if not stripped:
+        return stripped
+    if stripped.startswith("{") and stripped.endswith("}"):
+        return stripped
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start != -1 and end != -1 and start < end:
+        return stripped[start:end + 1]
+    return stripped
+
+
+def _get_json_llm():
+    model = get_llm(
+        request_timeout=settings.rag_answer_llm_timeout,
+        max_retries=0,
+    )
+    if settings.llm_provider == LLMProvider.OPENAI and model.__class__.__name__ == "ChatOpenAI":
+        return model.bind(response_format={"type": "json_object"})
+    return model
+
+
 class RagChain:
     def generate(
         self,
@@ -63,38 +126,28 @@ class RagChain:
         if candidates[0].score < RERANK_SCORE_THRESHOLD:
             return RagResult(status=RagStatus.NO_RESULT)
 
-        history_messages = []
-        for msg in (session_context or []):
-            if msg.sender_type == "USER":
-                history_messages.append(HumanMessage(content=msg.content))
-            else:
-                history_messages.append(AIMessage(content=msg.content))
-
         messages = [
             SystemMessage(content=build_system_prompt(custom_prompt)),
-            *history_messages,
+            *_build_history_messages(session_context),
             HumanMessage(content=f"[Context]\n{build_context(candidates)}\n\n[Question]\n{query}"),
         ]
 
-        parsed: _LLMAnswerSchema | None = None
-        last_error = ""
-        for attempt in range(2):
-            try:
-                with provider_call("llm"):
-                    response = get_llm().invoke(messages)
-                parsed = _LLMAnswerSchema.model_validate(json.loads(_extract_text(response)))
-                break
-            except ProviderError as e:
-                # 네트워크/API 오류 — infra가 이미 재시도했으므로 즉시 ERROR
-                return RagResult(status=RagStatus.ERROR, error_message=e.message)
-            except (json.JSONDecodeError, ValidationError) as e:
-                # JSON 파싱 또는 스키마 검증 실패 — 1회 재시도
-                last_error = str(e)
-                if attempt == 1:
-                    return RagResult(status=RagStatus.ERROR, error_message=last_error)
-
-        if parsed is None:
-            return RagResult(status=RagStatus.ERROR, error_message=last_error)
+        try:
+            _chain_start = time.perf_counter()
+            with provider_call("llm"):
+                response = _get_json_llm().invoke(messages)
+            if settings.latency_log_enabled:
+                logger.info("[latency] request_id=%s llm_provider=%s chain_ms=%.1f",
+                    get_request_id(), settings.llm_provider.value, (time.perf_counter() - _chain_start) * 1000)
+            raw_text = _extract_text(response)
+            parsed = _LLMAnswerSchema.model_validate(json.loads(_extract_json_object(raw_text)))
+        except ProviderError as e:
+            return RagResult(status=RagStatus.ERROR, error_message=e.message)
+        except (json.JSONDecodeError, ValidationError) as e:
+            logger.warning("RAG LLM JSON parse failed: %s", e)
+            if "raw_text" in locals():
+                logger.warning("RAG LLM raw response preview: %r", raw_text[:500])
+            return RagResult(status=RagStatus.ERROR, error_message=str(e))
 
         logger.warning("LLM 응답: status=%s, cited_ids=%s", parsed.status, parsed.cited_ids)
 

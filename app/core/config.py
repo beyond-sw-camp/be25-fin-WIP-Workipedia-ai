@@ -26,9 +26,14 @@ class Settings(BaseSettings):
     # Tool Calling
     tool_client: str = "stub"           # "stub" | "workipedia"
     be_base_url: str = "http://localhost:8080"
-    tool_http_timeout: float = 25.0     # D단계 전체 timeout(120s)보다 짧게
+    internal_api_key: str = ""          # BE InternalApiKeyFilter와 동일한 값이어야 한다 (X-Internal-Api-Key)
+    tool_http_timeout: float = 25.0     # D단계 전체 timeout보다 짧게
     max_context_messages: int = Field(default=10, ge=0)
     contextualize_llm_timeout: float = Field(default=25.0, gt=0, lt=30.0)
+    no_result_policy_timeout: float = Field(default=5.0, gt=0, lt=30.0)
+    rag_answer_llm_timeout: float = Field(default=8.0, gt=0, lt=30.0)
+    rag_retrieval_score_threshold: float = Field(default=0.50, ge=0.0)
+    rag_reranker_enabled: bool = True
 
     # 인프라 URL / Port
     ollama_base_url: str = "http://localhost:11434"
@@ -43,6 +48,9 @@ class Settings(BaseSettings):
     # 티켓 부서 라우팅 임계값 (환경변수로 재배포 없이 조정 가능)
     routing_score_threshold: float = 0.0
     routing_margin_threshold: float = 0.5
+
+    # RAG 단계별 latency 로깅 on/off
+    latency_log_enabled: bool = True
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -103,8 +111,8 @@ MASKING_EMAIL_ENABLED = False
 # ---------------------------------------------------------------------------
 # RAG 파라미터
 # ---------------------------------------------------------------------------
-RETRIEVAL_TOP_K = 50
-RERANK_TOP_K = 5
+RETRIEVAL_TOP_K = 20
+RERANK_TOP_K = 6
 RERANKER_MODEL = "bongsoo/kpf-cross-encoder-v1"
 # Cross-Encoder가 가장 관련 있다고 판단한 1위 문서의 최소 통과 점수.
 # 이 점수는 0~1 확률이 아니라 모델의 raw logit이므로 0.0이 관련도 0%라는 뜻은 아니다.
@@ -135,8 +143,8 @@ KNOWLEDGE_SYNC_CONFIG: dict[str, dict[str, str]] = {
 # ---------------------------------------------------------------------------
 STEP_TIMEOUT: dict[str, float] = {
     "CONTEXT": 30.0,
-    "A": 120.0,
-    "B": 120.0,
-    "C": 120.0,
-    "D": 120.0,
+    "A": 30.0,
+    "B": 30.0,
+    "C": 30.0,
+    "D": 60.0,
 }

@@ -1,7 +1,9 @@
+import logging
 import uuid as _uuid
 from dataclasses import dataclass
 
 from qdrant_client import QdrantClient
+from qdrant_client.http.exceptions import UnexpectedResponse
 from qdrant_client.models import (
     Distance,
     FieldCondition,
@@ -12,6 +14,8 @@ from qdrant_client.models import (
 )
 
 from app.core.config import EMBEDDING_DIM_MAP, RETRIEVAL_TOP_K, settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -73,15 +77,21 @@ class QdrantStore:
         top_k: int = RETRIEVAL_TOP_K,
         collection_name: str = "workipedia",
     ) -> QueryResult:
-        # _ensure_collection을 호출하지 않는다. 존재하지 않는 collection을 빈 결과로 처리하면
-        # 오타나 잘못된 collection명이 NO_RESULT로 조용히 통과되어 디버깅이 어렵다.
-        # search()는 qdrant-client 1.7+ 에서 제거됨. query_points()로 대체
-        response = self.client.query_points(
-            collection_name=collection_name,
-            query=query_embedding,
-            limit=top_k,
-            with_payload=True,
-        )
+        # _ensure_collection을 호출하지 않는다. 오타나 잘못된 collection명은 ERROR로 노출해야 한다.
+        # 단, 아직 인덱싱이 한 번도 이루어지지 않아 collection 자체가 없는 경우(404)는
+        # "데이터 없음(NO_RESULT)" 정상 상태이므로 빈 결과로 처리한다.
+        try:
+            response = self.client.query_points(
+                collection_name=collection_name,
+                query=query_embedding,
+                limit=top_k,
+                with_payload=True,
+            )
+        except UnexpectedResponse as e:
+            if e.status_code == 404:
+                logger.warning("[%s] collection 미존재 — NO_RESULT로 처리", collection_name)
+                return QueryResult(ids=[], documents=[], metadatas=[], distances=[])
+            raise
         results = response.points
         if not results:
             return QueryResult(ids=[], documents=[], metadatas=[], distances=[])
