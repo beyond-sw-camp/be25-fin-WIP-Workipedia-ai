@@ -7,6 +7,7 @@ from pydantic import BaseModel, model_validator
 
 from app.common.exceptions import MaskingBlockedError, ProviderError
 from app.common.masking import masker
+from app.core.config import settings
 from app.domain.rag.prompt import build_tool_system_prompt
 from app.domain.rag.schemas import GeneratedAnswer, RagResult, RagStatus
 from app.domain.tool.schemas import ToolExecutionResult
@@ -64,7 +65,10 @@ class ToolResultChain:
         parsed = None
         for attempt in range(2):
             try:
-                response = get_llm().invoke(messages)
+                response = get_llm(
+                    request_timeout=settings.tool_http_timeout,
+                    max_retries=0,
+                ).invoke(messages)
                 parsed = _LLMAnswerSchema.model_validate(json.loads(_extract_text(response)))
                 break
             except ProviderError:

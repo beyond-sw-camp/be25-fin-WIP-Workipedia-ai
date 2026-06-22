@@ -5,6 +5,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from app.common.exceptions import ProviderError, provider_call
+from app.core.config import settings
 from app.domain.tool.schemas import ToolDefinition, ToolSelection
 from app.infra.llm.factory import get_llm
 
@@ -65,7 +66,10 @@ class ToolSelector:
         for attempt in range(2):
             try:
                 with provider_call("llm"):
-                    response = get_llm().invoke(messages)
+                    response = get_llm(
+                        request_timeout=settings.tool_http_timeout,
+                        max_retries=0,
+                    ).invoke(messages)
                 parsed = _SelectorResponse.model_validate_json(_extract_text(response))
                 if not parsed.selected:
                     return None
