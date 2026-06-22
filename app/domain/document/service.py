@@ -1,5 +1,8 @@
+import logging
+import time
+
 from app.common.exceptions import ProviderError, WorkipediaException
-from app.core.config import CHUNK_CONFIG, COLLECTION_MAP
+from app.core.config import CHUNK_CONFIG, COLLECTION_MAP, settings
 from app.domain.document.chunker import chunk_text
 from app.domain.document.schemas import (
     DocumentDeleteResponse,
@@ -8,6 +11,8 @@ from app.domain.document.schemas import (
 )
 from app.infra.embedding.factory import embed_texts
 from app.infra.vector_store.qdrant_store import qdrant_store
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentService:
@@ -44,6 +49,7 @@ class DocumentService:
             WorkipediaException(500): 임베딩 실패 (ProviderError)
         """
         # source_type → Qdrant collection 이름, 내부 doc_id 결정
+        total_start = time.perf_counter()
         collection_name = self._resolve_collection(request.source_type)
         doc_id = f"{request.source_type}:{request.source_id}"  # 예: "MANUAL:123"
 
@@ -53,12 +59,14 @@ class DocumentService:
 
         # source_type별 청킹 파라미터 적용 (MANUAL·MANUAL_KNOWLEDGE은 길게, WORKI는 짧게)
         chunk_kwargs = CHUNK_CONFIG.get(request.source_type, {})
+        chunk_start = time.perf_counter()
         if request.pages:
             page_chunks = self._chunk_pages(request.pages, **chunk_kwargs)
             chunks = [chunk["text"] for chunk in page_chunks]
         else:
             page_chunks = []
             chunks = chunk_text(request.text, **chunk_kwargs)
+        chunk_ms = (time.perf_counter() - chunk_start) * 1000
         if not chunks:
             raise WorkipediaException(status_code=422, message="청킹 결과가 없습니다.")
 
@@ -80,14 +88,19 @@ class DocumentService:
 
         # 임베딩 먼저 시도 — 실패하면 기존 청크를 그대로 유지하고 500 반환
         try:
+            embed_start = time.perf_counter()
             embeddings = embed_texts(chunks)
+            embed_ms = (time.perf_counter() - embed_start) * 1000
         except ProviderError as e:
             raise WorkipediaException(status_code=500, message=f"임베딩 실패: {e}") from e
 
         # 임베딩 성공 후 기존 청크 삭제 (재인덱싱 시 구버전 청크가 검색에 섞이는 것 방지)
+        delete_start = time.perf_counter()
         qdrant_store.delete_by_doc_id(doc_id, collection_name=collection_name)
+        delete_ms = (time.perf_counter() - delete_start) * 1000
 
         # 새 청크 저장
+        upsert_start = time.perf_counter()
         qdrant_store.upsert(
             ids=chunk_ids,
             documents=chunks,
@@ -95,6 +108,27 @@ class DocumentService:
             metadatas=metadatas,
             collection_name=collection_name,
         )
+        upsert_ms = (time.perf_counter() - upsert_start) * 1000
+        total_ms = (time.perf_counter() - total_start) * 1000
+
+        if settings.latency_log_enabled:
+            logger.info(
+                "[latency] document_index source_type=%s source_id=%s collection=%s "
+                "pages=%d chars=%d chunks=%d provider=%s chunk_ms=%.1f embed_ms=%.1f "
+                "delete_ms=%.1f upsert_ms=%.1f total_ms=%.1f",
+                request.source_type,
+                request.source_id,
+                collection_name,
+                len(request.pages or []),
+                len(request.text),
+                len(chunks),
+                settings.embedding_provider.value,
+                chunk_ms,
+                embed_ms,
+                delete_ms,
+                upsert_ms,
+                total_ms,
+            )
 
         return DocumentIndexResponse(source_id=request.source_id, indexed_chunks=len(chunks))
 
