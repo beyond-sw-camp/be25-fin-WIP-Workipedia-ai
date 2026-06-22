@@ -56,7 +56,6 @@ jobs:
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
         run: |
           install -m 700 -d ~/.ssh
@@ -64,35 +63,32 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519_workipedia_deploy
           ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
 
-          cat > ~/.ssh/config <<EOF
-          Host workipedia-bastion
-            HostName $DEPLOY_HOST
-            Port $DEPLOY_PORT
-            User $DEPLOY_USER
-            IdentityFile ~/.ssh/id_ed25519_workipedia_deploy
-
-          Host workipedia-ai
-            HostName 192.168.0.162
-            User $DEPLOY_USER
-            IdentityFile ~/.ssh/id_ed25519_workipedia_deploy
-            ProxyJump workipedia-bastion
-            StrictHostKeyChecking accept-new
-          EOF
-          chmod 600 ~/.ssh/config
-
       - name: Log in to GHCR on AI server
         env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
           GHCR_PAT: ${{ secrets.GHCR_PAT }}
         run: |
-          printf '%s' "$GHCR_PAT" | ssh workipedia-ai \
+          printf '%s' "$GHCR_PAT" | ssh \
+            -i ~/.ssh/id_ed25519_workipedia_deploy \
+            -p "$DEPLOY_PORT" \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
             "docker login ghcr.io -u '$GHCR_USERNAME' --password-stdin"
 
       - name: Deploy AI
         env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           AI_IMAGE: ${{ env.IMAGE_NAME }}:${{ github.sha }}
         run: |
-          ssh workipedia-ai "AI_IMAGE='$AI_IMAGE' bash -s" <<'EOF'
+          ssh \
+            -i ~/.ssh/id_ed25519_workipedia_deploy \
+            -p "$DEPLOY_PORT" \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            "AI_IMAGE='$AI_IMAGE' bash -s" <<'EOF'
           set -euo pipefail
 
           infra_dir="$HOME/apps/workipedia/Workipedia-infra"
@@ -101,7 +97,7 @@ jobs:
           ./scripts/deploy.sh ai
 
           for attempt in $(seq 1 40); do
-            if curl -fsS http://192.168.0.162:8000/api/v1/health; then
+            if curl -fsS http://127.0.0.1:8000/api/v1/health; then
               docker image prune -f
               exit 0
             fi
