@@ -138,7 +138,7 @@ async def test_work_question_does_not_use_general_short_circuit(service):
 
 
 @pytest.mark.asyncio
-async def test_document_candidate_no_result_does_not_use_general_fallback(service):
+async def test_general_question_with_document_candidates_uses_general_fallback(service):
     expected = OrchestratorResult(
         status=RagStatus.NO_RESULT,
         action="CREATE_TICKET",
@@ -161,6 +161,37 @@ async def test_document_candidate_no_result_does_not_use_general_fallback(servic
         mock_policy.decide.return_value.answer = "한화비전은 방산 회사입니다."
 
         result = await service.ask("한화비전은 어떤 회사야?")
+
+    assert result.status == RagStatus.SUCCESS
+    assert result.route == "CHAT"
+    assert result.answer.answer == "한화비전은 방산 회사입니다."
+    assert result.answer.references == []
+
+
+@pytest.mark.asyncio
+async def test_work_support_with_document_candidates_returns_insufficient_context_message(service):
+    expected = OrchestratorResult(
+        status=RagStatus.NO_RESULT,
+        action="CREATE_TICKET",
+        step_history=[
+            StepRecord(
+                step="A",
+                status=RagStatus.NO_RESULT,
+                retrieval_top_score=0.63,
+                retrieval_candidate_count=20,
+            )
+        ],
+    )
+
+    with patch("app.domain.chatbot.service.masker") as mock_masker, \
+         patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.no_result_policy") as mock_policy:
+        mock_masker.mask.side_effect = lambda x: x
+        mock_orch.run = AsyncMock(return_value=expected)
+        mock_policy.decide.return_value.intent = "WORK_SUPPORT"
+        mock_policy.decide.return_value.answer = None
+
+        result = await service.ask("한화비전 설치 장애는 어떻게 처리해?")
 
     assert result.status == RagStatus.SUCCESS
     assert result.route == "CHAT"
