@@ -1,3 +1,5 @@
+import logging
+import time
 from typing import Literal
 
 from fastapi import APIRouter, Body, File, Form, HTTPException, Query, UploadFile
@@ -11,6 +13,7 @@ from app.domain.document.schemas import (
 from app.domain.document.service import document_service
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+logger = logging.getLogger(__name__)
 
 
 @router.post("/ingest", response_model=DocumentIndexResponse)
@@ -38,6 +41,7 @@ def ingest_document(
     all_pages: list[dict] | None = None
 
     try:
+        parse_start = time.perf_counter()
         for f in files:
             pages = parse_upload_pages(f)
             if pages is None:
@@ -48,6 +52,15 @@ def ingest_document(
                 if all_pages is None:
                     all_pages = []
                 all_pages.extend(pages)
+        logger.info(
+            "[latency] document_parse source_type=%s source_id=%s files=%d pages=%d chars=%d parse_ms=%.1f",
+            source_type,
+            source_id,
+            len(files),
+            len(all_pages or []),
+            sum(len(text) for text in texts),
+            (time.perf_counter() - parse_start) * 1000,
+        )
     except HTTPException:
         raise
     except Exception as e:
