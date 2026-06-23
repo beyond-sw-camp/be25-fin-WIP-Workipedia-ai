@@ -133,8 +133,13 @@ class ChatbotService:
         elapsed_ms = (time.perf_counter() - started_at) * 1000
         logger.warning("no_result_policy intent=%s elapsed_ms=%.1f", decision.intent, elapsed_ms)
 
-        if decision.intent == "WORK_SUPPORT":
-            return result
+        if decision.intent != "WORK_SUPPORT":
+            return OrchestratorResult(
+                status=RagStatus.SUCCESS,
+                answer=GeneratedAnswer(answer=decision.answer or "", references=[]),
+                route="CHAT",
+                step_history=result.step_history,
+            )
 
         if _has_document_candidates(result):
             return OrchestratorResult(
@@ -147,12 +152,7 @@ class ChatbotService:
                 step_history=result.step_history,
             )
 
-        return OrchestratorResult(
-            status=RagStatus.SUCCESS,
-            answer=GeneratedAnswer(answer=decision.answer or "", references=[]),
-            route="CHAT",
-            step_history=result.step_history,
-        )
+        return result
 
     async def _prepare(
         self,
