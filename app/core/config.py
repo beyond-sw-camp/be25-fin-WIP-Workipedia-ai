@@ -14,6 +14,7 @@ class LLMProvider(str, Enum):
 
 class EmbeddingProvider(str, Enum):
     LOCAL = "local"    # Ollama, 온프레미스
+    E5 = "e5"          # sentence-transformers multilingual-e5-base
     OPENAI = "openai"
     GOOGLE = "google"
 
@@ -72,11 +73,13 @@ CHAT_MODEL_MAP: dict[str, str] = {
 # ---------------------------------------------------------------------------
 EMBEDDING_MODEL_MAP: dict[str, str] = {
     "local": "bge-m3",
+    "e5": "intfloat/multilingual-e5-base",
     "openai": "text-embedding-3-small",
     "google": "text-embedding-004",
 }
 EMBEDDING_DIM_MAP: dict[str, int] = {
     "local": 1024,    # bge-m3
+    "e5": 768,        # intfloat/multilingual-e5-base
     "openai": 1536,   # text-embedding-3-small
     "google": 768,    # text-embedding-004
 }

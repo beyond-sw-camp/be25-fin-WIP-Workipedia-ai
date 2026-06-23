@@ -132,14 +132,17 @@ class RagOrchestrator:
             except asyncio.TimeoutError:
                 elapsed_ms = (time.perf_counter() - started_at) * 1000
                 logger.warning("[latency] request_id=%s step=%s status=TIMEOUT elapsed_ms=%.1f", get_request_id(), step.step_name, elapsed_ms)
-                history.append(StepRecord(step=step.step_name, status=RagStatus.ERROR, error_message="timeout"))
-                return OrchestratorResult(status=RagStatus.ERROR, step_history=history)
+                history.append(StepRecord(step=step.step_name, status=RagStatus.NO_RESULT, error_message="timeout"))
+                if step.step_name == "D":
+                    return OrchestratorResult(status=RagStatus.NO_RESULT, step_history=history, action="CREATE_TICKET")
+                continue
             except ProviderError as exc:
                 elapsed_ms = (time.perf_counter() - started_at) * 1000
                 logger.warning("[latency] request_id=%s step=%s status=ERROR elapsed_ms=%.1f error=%s", get_request_id(), step.step_name, elapsed_ms, exc.message)
-                history.append(StepRecord(step=step.step_name, status=RagStatus.ERROR, error_message=exc.message))
+                status = RagStatus.NO_RESULT if step.step_name == "D" else RagStatus.ERROR
+                history.append(StepRecord(step=step.step_name, status=status, error_message=exc.message))
                 if step.step_name == "D":
-                    return OrchestratorResult(status=RagStatus.ERROR, step_history=history)
+                    return OrchestratorResult(status=RagStatus.NO_RESULT, step_history=history, action="CREATE_TICKET")
                 continue
 
             elapsed_ms = (time.perf_counter() - started_at) * 1000
@@ -172,7 +175,7 @@ class RagOrchestrator:
             if result.status == RagStatus.BLOCKED:
                 return OrchestratorResult(status=RagStatus.BLOCKED, step_history=history)
             if result.status == RagStatus.ERROR and step.step_name == "D":
-                return OrchestratorResult(status=RagStatus.ERROR, step_history=history)
+                return OrchestratorResult(status=RagStatus.NO_RESULT, step_history=history, action="CREATE_TICKET")
             # NO_RESULT (또는 A/B/C의 ERROR) → 다음 단계로 계속
 
         logger.info(
