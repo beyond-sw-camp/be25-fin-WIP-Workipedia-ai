@@ -500,9 +500,9 @@ WebSocket/STOMP:
 - collection별 top 20 검색 결과를 부서 ID로 그룹화하고 vector 최고 점수 기준 상위 3개 부서를 선택한다.
 - 부서별 R&R 상위 1개와 승인 사례 상위 3개를 context로 구성해 로컬 Cross-Encoder로 reranking한다.
 - AI가 1위 raw score와 1·2위 score margin을 계산해 `AUTO_ASSIGNED` 또는 `COMMON_QUEUE`를 결정한다.
-- 후보 부서가 하나뿐이거나 score·margin이 임계값 미만이면 공통 접수 큐로 보낸다.
+- 후보 부서가 하나뿐이면 `routing_single_score_threshold`를 기준으로 자동 배정 여부를 결정하고, 후보가 2개 이상이면 score·margin 임계값을 함께 확인한다.
 - embedding 또는 Qdrant 실패는 HTTP 500, Cross-Encoder 실패는 `COMMON_QUEUE` 정상 응답으로 처리한다.
-- `routing_score_threshold`, `routing_margin_threshold`는 환경변수로 조정한다.
+- `routing_score_threshold`, `routing_single_score_threshold`, `routing_margin_threshold`는 환경변수로 조정한다.
 - `DEPT_RR`은 부서 ID, `ROUTING_CASE`는 승인 사례 고유 ID를 source ID로 사용한다.
 - 라우팅 지식은 `title + "\n" + content`를 임베딩하고 `{sourceType}:{sourceId}:0` 단일 논리 chunk ID로 선행 삭제 없이 upsert한다.
 - 동기화 payload는 `department_id`, `department_name`, `type`을 포함하며 라우팅 검색의 부서 그룹화에 직접 사용한다.

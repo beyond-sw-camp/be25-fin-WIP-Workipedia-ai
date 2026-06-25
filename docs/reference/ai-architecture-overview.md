@@ -106,6 +106,8 @@ API Layer
 
 `POST /api/v1/knowledge/sync`과 `DELETE /api/v1/knowledge/{source_id}`는 부서 R&R과 승인 라우팅 사례를 단건 동기화·삭제한다. 라우팅 지식은 source당 단일 deterministic point로 저장하며, source type별 collection과 metadata 계약은 `docs/domain-guides/ticket-routing-ai.md`를 따른다.
 
+`POST /api/v1/manual/change-summary`는 매뉴얼 본문 변경 diff를 받아 LLM으로 사용자용 한 줄 요약을 생성하는 AI 내부 endpoint다. `get_llm()`으로 provider 무관하게 호출하며, `[추가]/[삭제]/[수정]/[교체]` 태그를 접두로 붙인 간결한 한 줄을 반환한다. BE aisync 워커가 비동기로 호출하고(`source_type=MANUAL_CHANGE_SUMMARY`), 마스킹은 적용하지 않는다. 상세 계약은 `docs/domain-guides/manual-change-summary.md`를 정본으로 사용한다.
+
 ## Provider 구현
 
 ```text
@@ -131,6 +133,7 @@ EmbeddingProvider
 - 문서 chunking, embedding, retrieval
 - `POST /api/v1/documents/ingest` 인덱싱과 `DELETE /api/v1/documents/{source_id}?source_type=...` 삭제
 - `POST /api/v1/knowledge/sync` 라우팅 지식 upsert와 `DELETE /api/v1/knowledge/{source_id}?sourceType=...` 삭제
+- `POST /api/v1/manual/change-summary` 매뉴얼 변경 diff 한 줄 요약 생성(LLM, provider 무관, 마스킹 미적용)
 - source type별 마스킹·청킹 설정 적용
 - source type별 Qdrant collection과 deterministic UUID point ID 관리
 - provider별 embedding vector size 관리

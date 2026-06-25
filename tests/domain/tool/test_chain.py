@@ -89,6 +89,20 @@ def test_raw_tool_result_passed_to_llm(chain):
     assert raw_text in messages[1].content
 
 
+def test_tool_prompt_allows_question_subject_label(chain):
+    """질문에 포함된 지역/대상명을 답변 주어로 쓸 수 있다는 규칙을 전달한다."""
+    with patch("app.domain.tool.chain.get_llm") as mock_llm:
+        mock_llm.return_value.invoke.return_value = _llm_response(
+            {"status": "ANSWER", "answer": "남극의 현재 기온은 -55.8도입니다."}
+        )
+        chain.generate("남극 날씨 어때?", make_exec_result(), custom_prompt=None)
+
+    messages = mock_llm.return_value.invoke.call_args[0][0]
+    assert "질문에 포함된 지역명, 대상명, 조건은 답변의 주어 또는 범위로 사용할 수 있습니다" in messages[0].content
+    assert "수치와 상태 정보는 반드시 [Tool Result]에 있는 값만 사용하세요" in messages[0].content
+    assert "[Question]\n남극 날씨 어때?" in messages[1].content
+
+
 def test_answer_is_masked_before_returning(chain):
     """LLM 응답 답변에 마스킹이 적용되는지 확인."""
     with patch("app.domain.tool.chain.get_llm") as mock_llm, \
