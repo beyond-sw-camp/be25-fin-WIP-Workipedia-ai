@@ -103,7 +103,26 @@ class TicketRoutingService:
         ]
 
         if len(candidate_list) < 2:
-            return _common_queue(["후보 부서가 1개뿐이어서 자동 배정하지 않습니다."], candidate_list)
+            top_score = candidate_list[0].confidence_score
+            if top_score >= settings.routing_single_score_threshold:
+                top = top_depts[0]
+                return TicketRoutingResponse(
+                    assigned_department_id=top.department_id,
+                    assigned_department_name=top.department_name,
+                    confidence_score=top_score,
+                    score_margin=None,
+                    decision="AUTO_ASSIGNED",
+                    reasons=[
+                        f"단일 후보 유사도 점수({top_score:.3f})가 임계값({settings.routing_single_score_threshold})을 초과해 자동 배정합니다."
+                    ],
+                    candidate_departments=candidate_list,
+                    model=ROUTING_MODEL,
+                    provider=ROUTING_PROVIDER,
+                )
+            return _common_queue(
+                [f"단일 후보 유사도 점수({top_score:.3f})가 임계값({settings.routing_single_score_threshold})에 미달합니다."],
+                candidate_list,
+            )
 
         top_score = candidate_list[0].confidence_score
         score_margin = top_score - candidate_list[1].confidence_score
@@ -118,7 +137,7 @@ class TicketRoutingService:
                 assigned_department_name=top.department_name,
                 confidence_score=top_score,
                 score_margin=score_margin,
-                decision="ASSIGNED",
+                decision="AUTO_ASSIGNED",
                 reasons=[f"유사도 점수({top_score:.3f})와 마진({score_margin:.3f})이 임계값을 초과해 자동 배정합니다."],
                 candidate_departments=candidate_list,
                 model=ROUTING_MODEL,

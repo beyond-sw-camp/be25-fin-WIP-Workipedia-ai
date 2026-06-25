@@ -271,12 +271,13 @@ AI가 `decision`을 직접 계산한다.
 | 유효한 metadata를 가진 부서 없음 | `COMMON_QUEUE` |
 | Qdrant 연결·조회 실패 | HTTP 500 |
 | Cross-Encoder 실패 | `COMMON_QUEUE`, 후보 목록 없음 |
-| 후보 부서 1개 | `COMMON_QUEUE` |
+| 후보 부서 1개 + 점수 >= `routing_single_score_threshold` | `AUTO_ASSIGNED` |
+| 후보 부서 1개 + 점수 < `routing_single_score_threshold` | `COMMON_QUEUE` |
 | 1위 점수 < `routing_score_threshold` | `COMMON_QUEUE` |
 | 1·2위 점수 차 < `routing_margin_threshold` | `COMMON_QUEUE` |
 | 1위 점수와 점수 차 모두 통과 | `AUTO_ASSIGNED` |
 
-후보가 하나뿐이면 데이터 누락으로 경쟁 후보가 없는 상황을 높은 확신으로 오인할 수 있으므로 자동 배정하지 않는다.
+후보가 하나뿐이면 score margin을 계산할 수 없으므로 `routing_single_score_threshold`만 기준으로 자동 배정 여부를 판단한다.
 
 Cross-Encoder 점수는 raw score이며 `0~1` 확률로 해석하지 않는다.
 
@@ -287,6 +288,7 @@ Cross-Encoder 점수는 raw score이며 `0~1` 확률로 해석하지 않는다.
 ```python
 class Settings(BaseSettings):
     routing_score_threshold: float = 0.0
+    routing_single_score_threshold: float = 0.75
     routing_margin_threshold: float = 0.5
 ```
 
@@ -294,6 +296,7 @@ class Settings(BaseSettings):
 
 ```text
 ROUTING_SCORE_THRESHOLD
+ROUTING_SINGLE_SCORE_THRESHOLD
 ROUTING_MARGIN_THRESHOLD
 ```
 
