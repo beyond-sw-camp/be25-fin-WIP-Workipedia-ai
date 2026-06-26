@@ -238,6 +238,38 @@ def test_chat_source_includes_page_range_metadata(client):
     assert source["page_end"] == 21
 
 
+def test_chat_source_includes_file_name(client):
+    ref = RerankedCandidate(
+        candidate_id="MANUAL:42:0",
+        text="내용",
+        score=1.0,
+        rank=1,
+        metadata={
+            "source_type": "MANUAL",
+            "source_id": "42",
+            "chunk_index": 0,
+            "file_name": "file2.pdf",
+            "page_start": 1,
+            "page_end": 2,
+            "title": "소개서",
+        },
+    )
+    answer = GeneratedAnswer(answer="답변", references=[ref])
+    orch_result = OrchestratorResult(status=RagStatus.SUCCESS, answer=answer, route="A")
+
+    with patch("app.domain.chatbot.service.rag_orchestrator") as mock_orch, \
+         patch("app.domain.chatbot.service.masker") as mock_masker:
+        mock_masker.mask.side_effect = lambda x: x
+        mock_orch.run = AsyncMock(return_value=orch_result)
+        response = client.post("/api/v1/chat", json={"question": "질문"})
+
+    assert response.status_code == 200
+    source = response.json()["sources"][0]
+    assert source["file_name"] == "file2.pdf"
+    assert source["page_start"] == 1
+    assert source["page_end"] == 2
+
+
 def test_chat_source_chunk_index_from_candidate_id_fallback(client):
     """metadata에 chunk_index가 없으면 candidate_id 파싱으로 fallback한다."""
     ref = RerankedCandidate(
