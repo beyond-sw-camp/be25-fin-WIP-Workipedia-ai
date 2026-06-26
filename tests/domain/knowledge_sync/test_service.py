@@ -73,6 +73,14 @@ def service():
     return KnowledgeSyncService()
 
 
+@pytest.fixture(autouse=True)
+def _role_keyword_passthrough():
+    # 기본은 pass-through(원문 그대로) — DEPT_RR sync가 실제 LLM을 호출하지 않게 한다.
+    # 키워드 추출/실패를 검증하는 테스트만 side_effect를 덮어쓴다.
+    with patch("app.domain.knowledge_sync.service.extract_role_keywords", side_effect=lambda t: t) as m:
+        yield m
+
+
 def _dept_rr_request() -> KnowledgeSyncRequest:
     return KnowledgeSyncRequest(
         source_id=3,
@@ -140,15 +148,45 @@ def test_sync_deterministic_point_id(service):
     assert first_ids == second_ids == ["DEPT_RR:3:0"]
 
 
-def test_sync_embeds_title_and_content_combined(service):
+def test_sync_routing_case_embeds_title_and_content_combined(service):
+    # DEPT_RR이 아닌 source_type은 기존대로 title+content를 합쳐 임베딩한다.
     with (
+        patch("app.domain.knowledge_sync.service.get_embeddings") as mock_emb,
+        patch("app.domain.knowledge_sync.service.qdrant_store"),
+    ):
+        mock_emb.return_value.embed_query.return_value = [0.1] * 768
+        service.sync(_routing_case_request())
+
+    mock_emb.return_value.embed_query.assert_called_once_with(
+        "ERP 접근 장애 처리 사례\nERP 계정 잠금 문제를 해결했다."
+    )
+
+
+def test_sync_dept_rr_embeds_extracted_keywords_only(service):
+    # DEPT_RR은 부서명·보일러플레이트를 뺀 키워드만 임베딩한다 (라우팅 쏠림 방지).
+    with (
+        patch("app.domain.knowledge_sync.service.extract_role_keywords", return_value="RAG, 파이프라인"),
         patch("app.domain.knowledge_sync.service.get_embeddings") as mock_emb,
         patch("app.domain.knowledge_sync.service.qdrant_store"),
     ):
         mock_emb.return_value.embed_query.return_value = [0.1] * 768
         service.sync(_dept_rr_request())
 
-    mock_emb.return_value.embed_query.assert_called_once_with("개발1팀 R&R\nRAG 파이프라인을 담당한다.")
+    mock_emb.return_value.embed_query.assert_called_once_with("RAG, 파이프라인")
+
+
+def test_sync_dept_rr_falls_back_to_content_when_extraction_fails(service):
+    # 키워드 추출(LLM)이 실패하면 원문(content)으로 임베딩해 동기화가 깨지지 않게 한다.
+    with (
+        patch("app.domain.knowledge_sync.service.extract_role_keywords",
+              side_effect=ProviderError("llm", "추출 실패")),
+        patch("app.domain.knowledge_sync.service.get_embeddings") as mock_emb,
+        patch("app.domain.knowledge_sync.service.qdrant_store"),
+    ):
+        mock_emb.return_value.embed_query.return_value = [0.1] * 768
+        service.sync(_dept_rr_request())
+
+    mock_emb.return_value.embed_query.assert_called_once_with("RAG 파이프라인을 담당한다.")
 
 
 def test_sync_embedding_failure_does_not_call_upsert(service):

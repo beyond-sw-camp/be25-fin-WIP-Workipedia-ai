@@ -47,9 +47,11 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
 
     # 티켓 부서 라우팅 임계값 (환경변수로 재배포 없이 조정 가능)
-    routing_score_threshold: float = 0.0
-    routing_margin_threshold: float = 0.5
-    routing_single_score_threshold: float = 0.65
+    # Cross-Encoder(kpf) 재정렬 점수 스케일 기준값. 깨끗한 R&R 기준 정답 부서 점수 0.06~0.22, 마진 0.04~0.20 관측.
+    # ⚠️ 임시값 — 실제 티켓으로 재튜닝 필요.
+    routing_score_threshold: float = 0.05
+    routing_margin_threshold: float = 0.03
+    routing_single_score_threshold: float = 0.05
 
     # RAG 단계별 latency 로깅 on/off
     latency_log_enabled: bool = True
