@@ -7,6 +7,7 @@ from app.core.config import (
     ROUTING_RETRIEVAL_TOP_K,
     settings,
 )
+from app.domain.rag.reranker.cross_encoder_reranker import get_reranker
 from app.domain.rag.retriever import rag_retriever
 from app.domain.rag.schemas import RagCandidate
 from app.domain.ticket_routing.schemas import (
@@ -17,7 +18,7 @@ from app.domain.ticket_routing.schemas import (
 from app.common.exceptions import ProviderError, provider_call
 from app.infra.embedding.factory import get_embeddings
 
-ROUTING_MODEL = "embedding-similarity"
+ROUTING_MODEL = "cross-encoder"
 ROUTING_PROVIDER = "qdrant"
 
 
@@ -87,7 +88,18 @@ class TicketRoutingService:
         except ProviderError:
             return _common_queue(["라우팅 데이터 검색 중 오류가 발생해 공통 접수 큐로 이동합니다."], [])
 
-        groups = _group_by_dept(rr_results + case_results)
+        candidates = rr_results + case_results
+        if not candidates:
+            return _common_queue(["부서 R&R·사례 데이터가 없어 공통 접수 큐로 이동합니다."], [])
+
+        # bi-encoder 유사도는 부서를 거의 동점으로 주므로, Cross-Encoder로 재정렬해
+        # 변별력 있는 점수를 얻는다. (이 점수를 부서 그룹 max_score로 사용)
+        try:
+            reranked = get_reranker().rerank(query, candidates, top_k=len(candidates))
+        except ProviderError:
+            return _common_queue(["부서 후보 재정렬 중 오류가 발생해 공통 접수 큐로 이동합니다."], [])
+
+        groups = _group_by_dept(reranked)
         if not groups:
             return _common_queue(["부서 R&R·사례 데이터가 없어 공통 접수 큐로 이동합니다."], [])
 
