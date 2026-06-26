@@ -52,8 +52,6 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    env:
-      AI_IMAGE: ${{ env.IMAGE_NAME }}:${{ github.sha }}
 
     steps:
       - name: Configure AWS credentials
@@ -65,6 +63,8 @@ jobs:
 
       - name: Update AI image parameter
         run: |
+          AI_IMAGE="${IMAGE_NAME}:${GITHUB_SHA}"
+
           aws ssm put-parameter \
             --name "$AI_IMAGE_SSM_PARAMETER" \
             --type String \
