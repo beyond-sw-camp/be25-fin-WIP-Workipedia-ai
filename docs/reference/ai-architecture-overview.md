@@ -1,14 +1,14 @@
 # Workipedia AI Architecture Overview
 
 > 상태: Draft  
-> 최종 수정: 2026-06-12
+> 최종 수정: 2026-06-15
 
 ## 핵심 원칙
 
 - 지식 제공은 RAG로 통일한다.
 - QLoRA와 LangGraph는 사용하지 않는다.
 - 고객사별로 별도 배포하고 로컬/클라우드 차이는 provider 추상화와 배포 설정으로 처리한다.
-- 민감정보는 AI 로그·Vector Store 저장과 모델 호출 전에 마스킹한다.
+- BE RDB는 암호화 저장하며 읽을 때만 복호화한다. AI 서버는 사용자에게 반환하는 LLM 응답에만 마스킹을 적용한다.
 - 구조화된 실시간 데이터는 Tool Integration으로 조회한다.
 
 ## 폴백 파이프라인
@@ -50,13 +50,17 @@ return create_transition_action(request)
 ```text
 SUCCESS   : 유효한 근거 또는 Tool 결과로 답변 완료
 NO_RESULT : 근거 부족으로 다음 단계 진행
-ERROR     : timeout 등 실행 실패로 다음 단계 진행
+ERROR     : 예상 가능한 provider 실패는 다음 단계 진행
 BLOCKED   : 보안 또는 입력 검증 실패로 즉시 안전 응답
 ```
+
+단계 timeout은 worker thread를 실제 취소하지 못하므로 예외적으로 다음 단계로 진행하지 않고 `ERROR`를 즉시 반환한다. 예상하지 못한 구현 예외도 폴백으로 숨기지 않고 HTTP 500으로 전파한다.
 
 Reranker는 정렬 결과만 반환하지 않고 각 후보의 `candidate_id`, `text`, Cross-Encoder 원본 `score`, `rank`, `metadata`, Qdrant 원본 `retrieval_score`를 함께 반환한다. 라우팅 판단에서는 이를 바탕으로 `top_score`와 `score_margin`을 계산한다.
 
 LLM 응답 문자열에서 특정 문구를 찾는 방식은 보조 수단으로도 사용하지 않는다.
+
+`RagChain`은 LLM의 JSON 응답을 구조화 스키마로 검증하고, 응답의 인용 ID가 reranking 후보에 실제로 존재할 때만 `SUCCESS`와 references를 반환한다. 내부 `RagResult`를 외부 API 계약으로 변환하는 책임은 오케스트레이터 또는 ChatbotService에 둔다.
 
 ### RAG Negative Answer 판정
 
@@ -76,16 +80,33 @@ LLM 응답 문자열에서 특정 문구를 찾는 방식은 보조 수단으로
 API Layer
 └─ Orchestrator
    ├─ SensitiveDataMasker
+   ├─ ManualRagStep
+   ├─ WorkiRagStep
+   ├─ KnowledgeRagStep
+   ├─ ToolCallingStep
    ├─ RagService
    │  ├─ RagRetriever
    │  └─ CrossEncoderReranker
+   ├─ RagChain
+   │  ├─ PromptBuilder
+   │  └─ LlmProvider
+   ├─ ChatbotService
    ├─ ManualKnowledgeIndexer
    ├─ ToolSelector
-   ├─ DepartmentRoutingService
+   ├─ TicketRoutingService
    ├─ CrossEncoderReranker
-   ├─ LlmProvider
    └─ EmbeddingProvider
 ```
+
+`POST /api/v1/chat`은 세션 저장 API가 아니라 질문 한 건을 처리하는 AI 내부 추론 endpoint다. BE가 세션·메시지를 저장하고 AI 응답의 `answer`, `sources`, `route`, `action`을 외부 챗봇 API 계약으로 변환한다.
+
+출처는 `candidate_id`, `source_type`, `source_id`, `chunk_index`(nullable), `page_start`/`page_end`(PDF 기반 MANUAL인 경우 nullable), `title`, reranker `score`를 포함한다. `source_type`, `source_id`, `chunk_index`, `title`, `page_start`, `page_end`는 Qdrant metadata를 우선하고 `candidate_id` 파싱은 fallback으로만 사용한다. AI는 최종 답변에 실제 사용된 출처 식별 정보만 제공하며, `rag_citations` 저장과 FAQ 인기 매뉴얼 집계는 BE 책임이다.
+
+`POST /api/v1/tickets/routing`은 티켓 제목과 내용을 부서 R&R 및 승인 처리 사례와 비교해 부서 후보를 반환하는 AI 내부 endpoint다. 같은 embedding으로 `routing_dept_rr`와 `routing_cases`를 검색하고, 부서별 context를 Cross-Encoder로 reranking한 뒤 AI가 `AUTO_ASSIGNED` 또는 `COMMON_QUEUE`를 결정한다. 상세 계약은 `docs/domain-guides/ticket-routing-ai.md`를 정본으로 사용한다.
+
+`POST /api/v1/knowledge/sync`과 `DELETE /api/v1/knowledge/{source_id}`는 부서 R&R과 승인 라우팅 사례를 단건 동기화·삭제한다. 라우팅 지식은 source당 단일 deterministic point로 저장하며, source type별 collection과 metadata 계약은 `docs/domain-guides/ticket-routing-ai.md`를 따른다.
+
+`POST /api/v1/manual/change-summary`는 매뉴얼 본문 변경 diff를 받아 LLM으로 사용자용 한 줄 요약을 생성하는 AI 내부 endpoint다. `get_llm()`으로 provider 무관하게 호출하며, `[추가]/[삭제]/[수정]/[교체]` 태그를 접두로 붙인 간결한 한 줄을 반환한다. BE aisync 워커가 비동기로 호출하고(`source_type=MANUAL_CHANGE_SUMMARY`), 마스킹은 적용하지 않는다. 상세 계약은 `docs/domain-guides/manual-change-summary.md`를 정본으로 사용한다.
 
 ## Provider 구현
 
@@ -111,6 +132,8 @@ EmbeddingProvider
 
 - 문서 chunking, embedding, retrieval
 - `POST /api/v1/documents/ingest` 인덱싱과 `DELETE /api/v1/documents/{source_id}?source_type=...` 삭제
+- `POST /api/v1/knowledge/sync` 라우팅 지식 upsert와 `DELETE /api/v1/knowledge/{source_id}?sourceType=...` 삭제
+- `POST /api/v1/manual/change-summary` 매뉴얼 변경 diff 한 줄 요약 생성(LLM, provider 무관, 마스킹 미적용)
 - source type별 마스킹·청킹 설정 적용
 - source type별 Qdrant collection과 deterministic UUID point ID 관리
 - provider별 embedding vector size 관리
@@ -122,6 +145,7 @@ EmbeddingProvider
 - 폴백 오케스트레이션
 - 관리자 작성 부서 R&R과 승인된 처리 사례 기반 후보 검색
 - Cross-Encoder 기반 문서 및 부서 후보 reranking
+- 티켓 라우팅의 top score와 1·2위 score margin 기반 decision 산출
 - 처리 완료·승인 티켓 사례의 Vector Store 동기화
 - 민감정보 탐지/마스킹
 

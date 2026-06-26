@@ -3,6 +3,7 @@ from langchain_core.embeddings import Embeddings
 from app.core.config import EmbeddingProvider, settings
 from app.common.exceptions import ProviderError, provider_call
 from .base import BaseEmbeddingClient
+from .e5_embedding import E5EmbeddingClient
 from .ollama_embedding import OllamaEmbeddingClient
 from .openai_embedding import OpenAIEmbeddingClient
 from .google_embedding import GoogleEmbeddingClient
@@ -11,6 +12,8 @@ from .google_embedding import GoogleEmbeddingClient
 def get_embedding_client() -> BaseEmbeddingClient:
     if settings.embedding_provider == EmbeddingProvider.LOCAL:
         return OllamaEmbeddingClient()
+    if settings.embedding_provider == EmbeddingProvider.E5:
+        return E5EmbeddingClient()
     if settings.embedding_provider == EmbeddingProvider.OPENAI:
         return OpenAIEmbeddingClient()
     if settings.embedding_provider == EmbeddingProvider.GOOGLE:

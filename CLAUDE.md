@@ -66,7 +66,7 @@ AI 서버 구현과 BE 챗봇 연동의 주 담당은 김진혁이다. 관리자
 - 고객사마다 서버를 별도로 배포한다.
 - 로컬/클라우드 LLM과 Embedding 차이는 provider interface와 환경설정으로 분리한다.
 - 하나의 서버에서 tenant별 provider를 런타임 변경하지 않는다.
-- 민감정보 마스킹은 AI 서버가 전담하며, 모델 호출 전과 Vector Store 저장 전에 수행한다. BE RDB에는 원문을 저장하되 Vector Store와 외부 LLM에는 마스킹된 텍스트만 전달한다.
+- BE RDB는 암호화 저장하며 읽을 때만 복호화한다. AI 서버는 사용자에게 반환하는 응답(LLM 생성 결과)에만 마스킹을 적용한다. LLM 입력과 Vector Store 저장은 원문을 사용한다.
 - QLoRA와 LangGraph는 사용하지 않는다.
 
 ### Fallback Pipeline
@@ -203,6 +203,8 @@ make run
 - 구현 시작 전 반드시 새 브랜치를 만든다. `dev`나 `main`에 직접 작업하지 않는다.
 
 ## PR Rules
+
+PR 내용은 항상 코드 블록(` ```markdown `)으로 감싸서 출력한다.
 
 PR 내용 작성 시 `.github/PULL_REQUEST_TEMPLATE` 형식을 따른다.
 

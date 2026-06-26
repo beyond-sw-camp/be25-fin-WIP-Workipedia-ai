@@ -1,0 +1,16 @@
+.git
+.github
+.venv
+.env
+.cache
+.chroma
+__pycache__
+*.py[cod]
+.pytest_cache
+.idea
+.vscode
+docs
+models
+tests
+tmp
+uploads

@@ -31,7 +31,6 @@
 SYSTEM_ADMIN 등록·수정
 → BE RDB에 원문 저장
 → AI 동기화 요청
-→ AI가 민감정보 탐지 및 마스킹
 → 800자, overlap 200 기준 chunking 및 embedding
 → `manual_knowledge_chunks` collection upsert
 → 챗봇 C단계의 `MANUAL_KNOWLEDGE` 검색 소스에 반영
@@ -61,9 +60,8 @@ SYSTEM_ADMIN 등록·수정
 
 ## 보안
 
-- BE RDB에는 업무 원문을 저장할 수 있다.
-- AI는 모델 호출 전과 Vector Store 저장 전에 민감정보를 마스킹한다.
-- 민감정보 원문과 마스킹 전 텍스트를 AI 로그나 Vector Store에 저장하지 않는다.
+- BE RDB는 암호화 저장하며 읽을 때만 복호화한다.
+- AI 서버는 사용자에게 반환하는 LLM 응답에만 마스킹을 적용한다. Vector Store는 원문을 저장한다.
 - SYSTEM_ADMIN만 생성·수정·삭제할 수 있다.
 - 모든 변경과 동기화 재시도는 감사 로그에 기록한다.
 - 만료된 정보는 검색 결과에서 제외한다.

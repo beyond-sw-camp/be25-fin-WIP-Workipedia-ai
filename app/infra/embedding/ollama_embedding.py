@@ -1,4 +1,4 @@
-from langchain_community.embeddings import OllamaEmbeddings
+from langchain_ollama import OllamaEmbeddings
 from langchain_core.embeddings import Embeddings
 
 from app.core.config import EMBEDDING_MODEL_MAP, settings
@@ -12,5 +12,4 @@ class OllamaEmbeddingClient(BaseEmbeddingClient):
         return OllamaEmbeddings(
             base_url=settings.ollama_base_url,
             model=EMBEDDING_MODEL_MAP["local"],
-            timeout=_TIMEOUT,
         )

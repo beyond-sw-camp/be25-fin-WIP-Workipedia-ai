@@ -33,6 +33,8 @@ def service():
 
 
 def test_search_and_rerank_returns_reranked_list(service):
+    from app.core.config import settings
+
     candidates = _make_candidates(3)
     reranked = _make_reranked(candidates)
     mock_reranker = MagicMock()
@@ -41,6 +43,7 @@ def test_search_and_rerank_returns_reranked_list(service):
     with (
         patch("app.domain.rag.service.rag_retriever") as mock_retriever,
         patch("app.domain.rag.service.get_reranker", return_value=mock_reranker),
+        patch.object(settings, "rag_reranker_enabled", True),
     ):
         mock_retriever.search.return_value = candidates
         result = service.search_and_rerank("FastAPI 설치", "manual_chunks", rerank_top_k=3)
@@ -65,7 +68,64 @@ def test_search_and_rerank_returns_empty_when_no_candidates(service):
     mock_reranker.rerank.assert_not_called()
 
 
+def test_search_and_rerank_logs_top_cosine(service, caplog):
+    candidates = _make_candidates(2)
+    mock_reranker = MagicMock()
+
+    with (
+        patch("app.domain.rag.service.rag_retriever") as mock_retriever,
+        patch("app.domain.rag.service.get_reranker", return_value=mock_reranker),
+        caplog.at_level("INFO", logger="app.domain.rag.service"),
+    ):
+        mock_retriever.search.return_value = candidates
+        service.search_and_rerank("질문", "manual_chunks")
+
+    assert "collection=manual_chunks" in caplog.text
+    assert "top_cosine=0.9" in caplog.text
+    assert "top_candidate_id=MANUAL:1:0" in caplog.text
+
+
+def test_search_and_rerank_skips_reranker_when_retrieval_score_low(service):
+    from app.core.config import settings
+
+    candidates = [RagCandidate(candidate_id="MANUAL:1:0", text="낮은 관련도", score=0.2)]
+    mock_reranker = MagicMock()
+
+    with (
+        patch("app.domain.rag.service.rag_retriever") as mock_retriever,
+        patch("app.domain.rag.service.get_reranker", return_value=mock_reranker),
+        patch.object(settings, "rag_retrieval_score_threshold", 0.55),
+    ):
+        mock_retriever.search.return_value = candidates
+        result = service.search_and_rerank("사과가 뭐야?", "manual_chunks")
+
+    assert result == []
+    mock_reranker.rerank.assert_not_called()
+
+
+def test_search_and_rerank_can_use_retrieval_order_when_reranker_disabled(service):
+    from app.core.config import settings
+
+    candidates = _make_candidates(4)
+    mock_reranker = MagicMock()
+
+    with (
+        patch("app.domain.rag.service.rag_retriever") as mock_retriever,
+        patch("app.domain.rag.service.get_reranker", return_value=mock_reranker),
+        patch.object(settings, "rag_reranker_enabled", False),
+    ):
+        mock_retriever.search.return_value = candidates
+        result = service.search_and_rerank("한화비전은 어떤 회사야?", "manual_chunks", rerank_top_k=3)
+
+    assert [r.candidate_id for r in result] == ["MANUAL:1:0", "MANUAL:1:1", "MANUAL:1:2"]
+    assert [r.score for r in result] == [0.9, 0.8, 0.7]
+    assert [r.retrieval_score for r in result] == [0.9, 0.8, 0.7]
+    mock_reranker.rerank.assert_not_called()
+
+
 def test_search_knowledge_merges_two_collections(service):
+    from app.core.config import settings
+
     kd_candidates = _make_candidates(2, prefix="KNOWLEDGE_DATA")
     mk_candidates = [
         RagCandidate(candidate_id="MANUAL_KNOWLEDGE:2:0", text="수기 지식 A", score=0.85)
@@ -78,6 +138,7 @@ def test_search_knowledge_merges_two_collections(service):
     with (
         patch("app.domain.rag.service.rag_retriever") as mock_retriever,
         patch("app.domain.rag.service.get_reranker", return_value=mock_reranker),
+        patch.object(settings, "rag_reranker_enabled", True),
     ):
         mock_retriever.search.side_effect = [kd_candidates, mk_candidates]
         result = service.search_knowledge("지식 질문", rerank_top_k=3)
@@ -98,4 +159,48 @@ def test_search_knowledge_returns_empty_when_both_collections_empty(service):
         result = service.search_knowledge("질문")
 
     assert result == []
+    mock_reranker.rerank.assert_not_called()
+
+
+def test_search_knowledge_skips_reranker_when_merged_top_score_low(service):
+    from app.core.config import settings
+
+    kd_candidates = [RagCandidate(candidate_id="KNOWLEDGE_DATA:1:0", text="낮은 관련도", score=0.2)]
+    mk_candidates = [RagCandidate(candidate_id="MANUAL_KNOWLEDGE:2:0", text="낮은 관련도", score=0.3)]
+    mock_reranker = MagicMock()
+
+    with (
+        patch("app.domain.rag.service.rag_retriever") as mock_retriever,
+        patch("app.domain.rag.service.get_reranker", return_value=mock_reranker),
+        patch.object(settings, "rag_retrieval_score_threshold", 0.55),
+    ):
+        mock_retriever.search.side_effect = [kd_candidates, mk_candidates]
+        result = service.search_knowledge("사과가 뭐야?")
+
+    assert result == []
+    mock_reranker.rerank.assert_not_called()
+
+
+def test_search_knowledge_can_use_retrieval_order_when_reranker_disabled(service):
+    from app.core.config import settings
+
+    kd_candidates = _make_candidates(2, prefix="KNOWLEDGE_DATA")
+    mk_candidates = [
+        RagCandidate(candidate_id="MANUAL_KNOWLEDGE:2:0", text="수기 지식 A", score=0.85)
+    ]
+    mock_reranker = MagicMock()
+
+    with (
+        patch("app.domain.rag.service.rag_retriever") as mock_retriever,
+        patch("app.domain.rag.service.get_reranker", return_value=mock_reranker),
+        patch.object(settings, "rag_reranker_enabled", False),
+    ):
+        mock_retriever.search.side_effect = [kd_candidates, mk_candidates]
+        result = service.search_knowledge("지식 질문", rerank_top_k=3)
+
+    assert [r.candidate_id for r in result] == [
+        "KNOWLEDGE_DATA:1:0",
+        "KNOWLEDGE_DATA:1:1",
+        "MANUAL_KNOWLEDGE:2:0",
+    ]
     mock_reranker.rerank.assert_not_called()
