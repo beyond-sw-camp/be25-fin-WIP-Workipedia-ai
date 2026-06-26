@@ -9,6 +9,7 @@ from app.domain.document.schemas import (
     DocumentDeleteResponse,
     DocumentIndexRequest,
     DocumentIndexResponse,
+    PageIndexRequest,
 )
 from app.domain.document.service import document_service
 
@@ -110,6 +111,24 @@ def ingest_text(
                 text=text,
             )
         )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.post("/ingest-pages", response_model=DocumentIndexResponse)
+def ingest_pages(request: PageIndexRequest) -> DocumentIndexResponse:
+    """BE가 페이지 단위 텍스트와 원본 파일/페이지 메타데이터를 전달해 인덱싱한다.
+
+    각 chunk에 file_name, file_key, page_start/page_end, global_page_start/end를 저장해
+    챗봇 답변 citation에서 "파일명 / N페이지"를 표시할 수 있게 한다.
+    PDF는 항상 페이지가 있으므로 MANUAL의 page-aware 적재 경로다.
+
+    에러:
+    - 422: 빈 pages, 빈 청킹 결과, 지원하지 않는 source_type
+    - 500: 임베딩 실패
+    """
+    try:
+        return document_service.index_pages(request)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 

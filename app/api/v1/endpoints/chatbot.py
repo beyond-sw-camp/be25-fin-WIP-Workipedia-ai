@@ -71,6 +71,7 @@ def _to_source_item(ref) -> SourceItem:
         source_type=source_type,
         source_id=source_id,
         chunk_index=chunk_index,
+        file_name=ref.metadata.get("file_name") or ref.metadata.get("fileName"),
         page_start=_extract_positive_int(ref.metadata.get("page_start") or ref.metadata.get("pageStart")),
         page_end=_extract_positive_int(ref.metadata.get("page_end") or ref.metadata.get("pageEnd")),
         title=ref.metadata.get("title", ref.candidate_id),

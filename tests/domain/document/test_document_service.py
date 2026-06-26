@@ -2,7 +2,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.domain.document.schemas import DocumentIndexRequest, DocumentPage
+from app.domain.document.schemas import (
+    DocumentIndexRequest,
+    DocumentPage,
+    PageDocumentItem,
+    PageIndexRequest,
+)
 from app.domain.document.service import DocumentService
 
 
@@ -85,6 +90,123 @@ def test_index_pdf_pages_split_long_page_by_chunk_size(service):
     assert all(len(document) <= 500 for document in documents)
     assert all(meta["page_start"] == 1 for meta in metadatas)
     assert all(meta["page_end"] == 1 for meta in metadatas)
+
+
+def _index_pages_metadatas(service, request):
+    with (
+        patch("app.domain.document.service.embed_texts") as mock_embed,
+        patch("app.domain.document.service.qdrant_store") as mock_store,
+    ):
+        mock_embed.side_effect = lambda chunks: [[0.1] * 768] * len(chunks)
+        mock_store.delete_by_doc_id.return_value = 0
+        result = service.index_pages(request)
+    return result, mock_store
+
+
+def test_index_pages_carries_file_and_page_metadata(service):
+    request = PageIndexRequest(
+        source_id=1,
+        source_type="MANUAL",
+        title="PDF 문서",
+        pages=[
+            PageDocumentItem(file_name="file1.pdf", file_key="manuals/1/file1.pdf",
+                             file_sort_order=0, page_number=1, global_page_number=1,
+                             text="첫번째 페이지 내용 알파"),
+        ],
+    )
+    result, mock_store = _index_pages_metadatas(service, request)
+
+    assert result.source_id == 1
+    mock_store.delete_by_doc_id.assert_called_once()
+    mock_store.upsert.assert_called_once()
+    metadatas = mock_store.upsert.call_args.kwargs["metadatas"]
+    required = {"file_name", "file_key", "file_sort_order",
+                "page_start", "page_end", "global_page_start", "global_page_end"}
+    assert all(required <= meta.keys() for meta in metadatas)
+    assert metadatas[0]["file_name"] == "file1.pdf"
+    assert metadatas[0]["file_key"] == "manuals/1/file1.pdf"
+
+
+def test_index_pages_merges_small_pages_into_page_range(service):
+    """한 파일 안의 짧은 페이지들은 하나의 청크로 합쳐지고 page_start..page_end 범위로 저장된다."""
+    request = PageIndexRequest(
+        source_id=1,
+        source_type="MANUAL",
+        title="PDF 문서",
+        pages=[
+            PageDocumentItem(file_name="file1.pdf", file_key="k1",
+                             file_sort_order=0, page_number=1, global_page_number=1,
+                             text="첫번째 페이지 알파"),
+            PageDocumentItem(file_name="file1.pdf", file_key="k1",
+                             file_sort_order=0, page_number=2, global_page_number=2,
+                             text="두번째 페이지 베타"),
+        ],
+    )
+    _, mock_store = _index_pages_metadatas(service, request)
+
+    metadatas = mock_store.upsert.call_args.kwargs["metadatas"]
+    assert len(metadatas) == 1
+    assert metadatas[0]["page_start"] == 1
+    assert metadatas[0]["page_end"] == 2
+    assert metadatas[0]["global_page_start"] == 1
+    assert metadatas[0]["global_page_end"] == 2
+
+
+def test_index_pages_does_not_cross_file_boundary(service):
+    """다른 파일의 짧은 페이지는 합치지 않는다 — 파일별로 청크가 분리된다."""
+    request = PageIndexRequest(
+        source_id=1,
+        source_type="MANUAL",
+        title="PDF 문서",
+        pages=[
+            PageDocumentItem(file_name="file1.pdf", file_key="k1",
+                             file_sort_order=0, page_number=1, global_page_number=1,
+                             text="파일하나 알파"),
+            PageDocumentItem(file_name="file2.pdf", file_key="k2",
+                             file_sort_order=1, page_number=1, global_page_number=2,
+                             text="파일둘 베타"),
+        ],
+    )
+    _, mock_store = _index_pages_metadatas(service, request)
+
+    metadatas = mock_store.upsert.call_args.kwargs["metadatas"]
+    assert len(metadatas) == 2
+    assert metadatas[0]["file_name"] == "file1.pdf"
+    assert metadatas[0]["page_start"] == 1 and metadatas[0]["page_end"] == 1
+    assert metadatas[1]["file_name"] == "file2.pdf"
+    assert metadatas[1]["global_page_start"] == 2
+
+
+def test_index_pages_splits_long_page_within_same_page(service):
+    """한 페이지가 chunk_size보다 길면 여러 청크로 쪼개지되 모두 같은 페이지 번호를 가진다."""
+    request = PageIndexRequest(
+        source_id=1,
+        source_type="MANUAL",
+        title="PDF 문서",
+        pages=[
+            PageDocumentItem(file_name="file1.pdf", file_key="k1",
+                             file_sort_order=0, page_number=3, global_page_number=3,
+                             text="긴 페이지 내용 " * 200),
+        ],
+    )
+    _, mock_store = _index_pages_metadatas(service, request)
+
+    metadatas = mock_store.upsert.call_args.kwargs["metadatas"]
+    assert len(metadatas) >= 2
+    assert all(meta["page_start"] == 3 and meta["page_end"] == 3 for meta in metadatas)
+    assert all(meta["global_page_start"] == 3 for meta in metadatas)
+
+
+def test_index_pages_raises_on_invalid_source_type(service):
+    request = PageIndexRequest(
+        source_id=1,
+        source_type="UNKNOWN",
+        title="문서",
+        pages=[PageDocumentItem(file_name="f.pdf", file_key="k", file_sort_order=0,
+                                page_number=1, global_page_number=1, text="내용")],
+    )
+    with pytest.raises(ValueError):
+        service.index_pages(request)
 
 
 def test_index_embed_first_then_delete(service):
