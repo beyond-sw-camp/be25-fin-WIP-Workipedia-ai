@@ -1,0 +1,113 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/beyond-sw-camp/be25-fin-wip-workipedia-ai
+  AI_ASG_NAME: ${{ vars.AI_ASG_NAME || 'workipedia-ai-asg' }}
+  AI_IMAGE_SSM_PARAMETER: ${{ vars.AI_IMAGE_SSM_PARAMETER || '/workipedia/prod/ai/image' }}
+
+jobs:
+  build:
+    name: Build and Push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to ASG
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      AI_IMAGE: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_KEY }}
+          aws-region: ${{ vars.AWS_REGION || secrets.AWS_REGION }}
+
+      - name: Update AI image parameter
+        run: |
+          aws ssm put-parameter \
+            --name "$AI_IMAGE_SSM_PARAMETER" \
+            --type String \
+            --value "$AI_IMAGE" \
+            --overwrite
+
+      - name: Start ASG instance refresh
+        id: refresh
+        run: |
+          refresh_id="$(aws autoscaling start-instance-refresh \
+            --auto-scaling-group-name "$AI_ASG_NAME" \
+            --strategy Rolling \
+            --preferences '{"MinHealthyPercentage":100,"InstanceWarmup":300}' \
+            --query 'InstanceRefreshId' \
+            --output text)"
+
+          echo "refresh_id=$refresh_id" >> "$GITHUB_OUTPUT"
+          echo "Started instance refresh: $refresh_id"
+
+      - name: Wait for ASG instance refresh
+        run: |
+          refresh_id="${{ steps.refresh.outputs.refresh_id }}"
+
+          for attempt in $(seq 1 80); do
+            status="$(aws autoscaling describe-instance-refreshes \
+              --auto-scaling-group-name "$AI_ASG_NAME" \
+              --instance-refresh-ids "$refresh_id" \
+              --query 'InstanceRefreshes[0].Status' \
+              --output text)"
+
+            echo "Instance refresh $refresh_id status: $status"
+
+            case "$status" in
+              Successful)
+                exit 0
+                ;;
+              Failed|Cancelled|RollbackFailed|RollbackSuccessful)
+                exit 1
+                ;;
+            esac
+
+            sleep 30
+          done
+
+          echo "Timed out waiting for instance refresh: $refresh_id"
+          exit 1
