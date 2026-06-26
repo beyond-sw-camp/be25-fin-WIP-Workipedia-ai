@@ -15,6 +15,8 @@ concurrency:
 
 env:
   IMAGE_NAME: ghcr.io/beyond-sw-camp/be25-fin-wip-workipedia-ai
+  AI_ASG_NAME: ${{ vars.AI_ASG_NAME || 'workipedia-ai-asg' }}
+  AI_IMAGE_SSM_PARAMETER: ${{ vars.AI_IMAGE_SSM_PARAMETER || '/workipedia/prod/ai/image' }}
 
 jobs:
   build:
@@ -46,67 +48,66 @@ jobs:
           cache-to: type=gha,mode=max
 
   deploy:
-    name: Deploy
+    name: Deploy to ASG
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
 
     steps:
-      - name: Configure SSH
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_KEY }}
+          aws-region: ${{ vars.AWS_REGION || secrets.AWS_REGION }}
+
+      - name: Update AI image parameter
         run: |
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519_workipedia_deploy
-          chmod 600 ~/.ssh/id_ed25519_workipedia_deploy
-          ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+          AI_IMAGE="${IMAGE_NAME}:${GITHUB_SHA}"
 
-      - name: Log in to GHCR on AI server
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
-          GHCR_PAT: ${{ secrets.GHCR_PAT }}
+          aws ssm put-parameter \
+            --name "$AI_IMAGE_SSM_PARAMETER" \
+            --type String \
+            --value "$AI_IMAGE" \
+            --overwrite
+
+      - name: Start ASG instance refresh
+        id: refresh
         run: |
-          printf '%s' "$GHCR_PAT" | ssh \
-            -i ~/.ssh/id_ed25519_workipedia_deploy \
-            -p "$DEPLOY_PORT" \
-            "$DEPLOY_USER@$DEPLOY_HOST" \
-            "docker login ghcr.io -u '$GHCR_USERNAME' --password-stdin"
+          refresh_id="$(aws autoscaling start-instance-refresh \
+            --auto-scaling-group-name "$AI_ASG_NAME" \
+            --strategy Rolling \
+            --preferences '{"MinHealthyPercentage":100,"InstanceWarmup":300}' \
+            --query 'InstanceRefreshId' \
+            --output text)"
 
-      - name: Deploy AI
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          AI_IMAGE: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          echo "refresh_id=$refresh_id" >> "$GITHUB_OUTPUT"
+          echo "Started instance refresh: $refresh_id"
+
+      - name: Wait for ASG instance refresh
         run: |
-          ssh \
-            -i ~/.ssh/id_ed25519_workipedia_deploy \
-            -p "$DEPLOY_PORT" \
-            "$DEPLOY_USER@$DEPLOY_HOST" \
-            "AI_IMAGE='$AI_IMAGE' bash -s" <<'EOF'
-          set -euo pipefail
+          refresh_id="${{ steps.refresh.outputs.refresh_id }}"
 
-          infra_dir="$HOME/apps/workipedia/Workipedia-infra"
-          cd "$infra_dir"
-          git pull --ff-only
-          ./scripts/deploy.sh ai
+          for attempt in $(seq 1 80); do
+            status="$(aws autoscaling describe-instance-refreshes \
+              --auto-scaling-group-name "$AI_ASG_NAME" \
+              --instance-refresh-ids "$refresh_id" \
+              --query 'InstanceRefreshes[0].Status' \
+              --output text)"
 
-          for attempt in $(seq 1 40); do
-            if curl -fsS http://127.0.0.1:8000/api/v1/health; then
-              docker image prune -f
-              exit 0
-            fi
-            sleep 10
+            echo "Instance refresh $refresh_id status: $status"
+
+            case "$status" in
+              Successful)
+                exit 0
+                ;;
+              Failed|Cancelled|RollbackFailed|RollbackSuccessful)
+                exit 1
+                ;;
+            esac
+
+            sleep 30
           done
 
-          docker compose \
-            --env-file ai/.env \
-            --file ai/docker-compose.yml \
-            logs --tail=200 ai
+          echo "Timed out waiting for instance refresh: $refresh_id"
           exit 1
-          EOF
