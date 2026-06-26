@@ -15,6 +15,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+RUN python -c "from sentence_transformers import CrossEncoder, SentenceTransformer; CrossEncoder('bongsoo/kpf-cross-encoder-v1'); SentenceTransformer('intfloat/multilingual-e5-base', device='cpu')"
+
 COPY app ./app
 
 RUN mkdir -p "${HF_HOME}" \
