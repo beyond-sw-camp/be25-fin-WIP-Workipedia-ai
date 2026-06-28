@@ -12,6 +12,9 @@ from app.infra.llm.factory import get_llm
 _SYSTEM_PROMPT = """아래 Tool 목록 중 사용자 질문에 답변하는 데 필요한 Tool을 하나 선택하고 입력 인자를 지정하라.
 적합한 Tool이 없으면 selected=false로 반환하라.
 입력 인자는 각 Tool의 parametersSchema에 정의된 필드만 사용할 수 있다.
+accessScope가 SELF_ONLY인 Tool의 selfIdentityParam 값은 시스템이 자동으로 채우므로 inputs에 포함하지 않아도 된다.
+사용자가 "나", "내", "본인"의 휴가/연차/잔여일처럼 자기 자신의 정보를 묻고, 그 목적에 맞는 SELF_ONLY Tool이 있으면 그 Tool을 선택하라.
+SELF_ONLY Tool은 selfIdentityParam 값을 몰라도 selected=true로 반환할 수 있다.
 
 반드시 아래 JSON 형식 중 하나로만 반환하라. JSON 외 다른 텍스트는 포함하지 마라.
 {"selected": true, "tool_id": "<tool_id>", "inputs": {...}}
@@ -37,10 +40,20 @@ class _SelectorResponse(BaseModel):
 
 def _tools_context(tools: list[ToolDefinition]) -> str:
     items = [
-        f"- tool_id: {t.tool_id}\n  name: {t.name}\n  description: {t.description}\n  parametersSchema: {json.dumps(t.parameters_schema, ensure_ascii=False)}"
+        f"- tool_id: {t.tool_id}\n  name: {t.name}\n  description: {t.description}\n  accessScope: {t.access_scope}\n  selfIdentityParam: {t.self_identity_param or ''}\n  parametersSchema: {json.dumps(t.parameters_schema, ensure_ascii=False)}"
         for t in tools
     ]
     return "\n".join(items)
+
+
+def _resolve_tool_id(selected_tool_id: str, tools: list[ToolDefinition]) -> str | None:
+    for tool in tools:
+        if selected_tool_id == tool.tool_id:
+            return tool.tool_id
+    for tool in tools:
+        if selected_tool_id == tool.name:
+            return tool.tool_id
+    return None
 
 
 def _extract_text(response) -> str:
@@ -73,7 +86,10 @@ class ToolSelector:
                 parsed = _SelectorResponse.model_validate_json(_extract_text(response))
                 if not parsed.selected:
                     return None
-                return ToolSelection(tool_id=parsed.tool_id, inputs=parsed.inputs)
+                resolved_tool_id = _resolve_tool_id(parsed.tool_id, tools)
+                if resolved_tool_id is None:
+                    raise ValueError(f"허용되지 않은 tool_id: {parsed.tool_id}")
+                return ToolSelection(tool_id=resolved_tool_id, inputs=parsed.inputs)
             except ProviderError:
                 raise
             except Exception as exc:

@@ -40,18 +40,23 @@ class WorkipediaToolClient:
                         description=item["description"],
                         # BE의 parametersSchema는 JSON 컬럼이 아니라 JSON 문자열로 내려온다.
                         parameters_schema=json.loads(item["parametersSchema"]),
+                        access_scope=item.get("accessScope") or "UNRESTRICTED",
+                        self_identity_param=item.get("selfIdentityParam"),
                     )
                     for item in resp.json()
                 ]
         except (httpx.HTTPStatusError, httpx.RequestError, KeyError, ValueError, TypeError, AttributeError) as exc:
             raise ProviderError("tool", str(exc)) from exc
 
-    def execute(self, tool_id: str, inputs: dict) -> ToolExecutionResult:
+    def execute(self, tool_id: str, inputs: dict, caller_employee_id: str | None = None) -> ToolExecutionResult:
         try:
             with self._client() as client:
+                payload = {"parameters": inputs}
+                if caller_employee_id:
+                    payload["callerEmployeeId"] = caller_employee_id
                 resp = client.post(
                     f"{_INTERNAL_PREFIX}/{tool_id}/execute",
-                    json={"parameters": inputs},
+                    json=payload,
                 )
                 resp.raise_for_status()
                 body = resp.json()

@@ -24,7 +24,14 @@ class StepRunner(Protocol):
     step_name: str
     timeout: float
 
-    def run(self, query: str, retrieval_query: str, custom_prompt: str | None, session_context: list) -> RagResult:
+    def run(
+        self,
+        query: str,
+        retrieval_query: str,
+        custom_prompt: str | None,
+        session_context: list,
+        caller_employee_id: str | None = None,
+    ) -> RagResult:
         ...
 
 
@@ -38,7 +45,14 @@ class ManualRagStep:
         self._service = RagService()
         self._chain = RagChain()
 
-    def run(self, query: str, retrieval_query: str, custom_prompt: str | None, session_context: list[SessionMessage]) -> RagResult:
+    def run(
+        self,
+        query: str,
+        retrieval_query: str,
+        custom_prompt: str | None,
+        session_context: list[SessionMessage],
+        caller_employee_id: str | None = None,
+    ) -> RagResult:
         candidates = self._service.search_and_rerank(retrieval_query, COLLECTION_MAP["MANUAL"])
         result = self._chain.generate(query, candidates, custom_prompt, session_context)
         result.retrieval_top_score = self._service.last_retrieval_top_score
@@ -56,7 +70,14 @@ class WorkiRagStep:
         self._service = RagService()
         self._chain = RagChain()
 
-    def run(self, query: str, retrieval_query: str, custom_prompt: str | None, session_context: list[SessionMessage]) -> RagResult:
+    def run(
+        self,
+        query: str,
+        retrieval_query: str,
+        custom_prompt: str | None,
+        session_context: list[SessionMessage],
+        caller_employee_id: str | None = None,
+    ) -> RagResult:
         candidates = self._service.search_and_rerank(retrieval_query, COLLECTION_MAP["WORKI"])
         result = self._chain.generate(query, candidates, custom_prompt, session_context)
         result.retrieval_top_score = self._service.last_retrieval_top_score
@@ -74,7 +95,14 @@ class KnowledgeRagStep:
         self._service = RagService()
         self._chain = RagChain()
 
-    def run(self, query: str, retrieval_query: str, custom_prompt: str | None, session_context: list[SessionMessage]) -> RagResult:
+    def run(
+        self,
+        query: str,
+        retrieval_query: str,
+        custom_prompt: str | None,
+        session_context: list[SessionMessage],
+        caller_employee_id: str | None = None,
+    ) -> RagResult:
         candidates = self._service.search_knowledge(retrieval_query)
         result = self._chain.generate(query, candidates, custom_prompt, session_context)
         result.retrieval_top_score = self._service.last_retrieval_top_score
@@ -96,8 +124,15 @@ class ToolCallingStep:
             result_chain=ToolResultChain(),
         )
 
-    def run(self, query: str, retrieval_query: str, custom_prompt: str | None, session_context: list[SessionMessage]) -> RagResult:
-        return self._service.run(query, retrieval_query, custom_prompt, session_context)
+    def run(
+        self,
+        query: str,
+        retrieval_query: str,
+        custom_prompt: str | None,
+        session_context: list[SessionMessage],
+        caller_employee_id: str | None = None,
+    ) -> RagResult:
+        return self._service.run(query, retrieval_query, custom_prompt, session_context, caller_employee_id=caller_employee_id)
 
 
 # ── 폴백 오케스트레이터 ────────────────────────────────────────────────────────
@@ -114,6 +149,7 @@ class RagOrchestrator:
         retrieval_query: str | None = None,
         custom_prompt: str | None = None,
         session_context: list[SessionMessage] | None = None,
+        caller_employee_id: str | None = None,
     ) -> OrchestratorResult:
         if retrieval_query is None:
             retrieval_query = query
@@ -126,7 +162,7 @@ class RagOrchestrator:
             started_at = time.perf_counter()
             try:
                 result = await asyncio.wait_for(
-                    asyncio.to_thread(step.run, query, retrieval_query, custom_prompt, session_context),
+                    asyncio.to_thread(step.run, query, retrieval_query, custom_prompt, session_context, caller_employee_id),
                     timeout=step.timeout,
                 )
             except asyncio.TimeoutError:

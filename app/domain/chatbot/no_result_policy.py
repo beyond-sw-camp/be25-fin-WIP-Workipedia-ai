@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from typing import Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -83,7 +84,17 @@ _WORK_SUPPORT_PRECHECK_KEYWORDS = (
     "부서",
     "문서",
     "매뉴얼",
+    "전화번호",
+    "번호",
+    "연락처",
+    "직원",
+    "임직원",
+    "사번",
+    "조회",
 )
+
+_LOOKUP_LIKE_NUMBER_RE = re.compile(r"\d{4,}")
+_EMPLOYEE_ID_LIKE_RE = re.compile(r"(?<![a-z0-9])[a-z]{1,4}\d{2,}(?![a-z0-9])")
 
 
 def _normalize_question(text: str) -> str:
@@ -100,6 +111,10 @@ def should_precheck_general_chat(question: str) -> bool:
     if normalized in _GENERAL_CHAT_PRECHECK_EXACT:
         return True
     if any(keyword in normalized for keyword in _WORK_SUPPORT_PRECHECK_KEYWORDS):
+        return False
+    if _EMPLOYEE_ID_LIKE_RE.search(normalized):
+        return False
+    if _LOOKUP_LIKE_NUMBER_RE.search(normalized):
         return False
     return any(hint in normalized for hint in _GENERAL_CHAT_PRECHECK_HINTS)
 

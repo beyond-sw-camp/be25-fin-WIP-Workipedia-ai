@@ -8,6 +8,8 @@ class ToolDefinition:
     name: str
     description: str
     parameters_schema: dict[str, Any]  # JSON Schema (BE에서 받은 그대로)
+    access_scope: str = "UNRESTRICTED"
+    self_identity_param: str | None = None
 
 
 @dataclass
