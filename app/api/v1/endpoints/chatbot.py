@@ -86,6 +86,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
         request.question,
         custom_prompt=request.custom_prompt,
         session_context=request.session_context,
+        caller_employee_id=request.caller_employee_id,
     )
     logger.warning("step_history: %s", _to_step_history(result.step_history))
 
@@ -147,6 +148,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                 request.question,
                 custom_prompt=request.custom_prompt,
                 session_context=request.session_context,
+                caller_employee_id=request.caller_employee_id,
             ):
                 yield _format_sse(event)
         except Exception as exc:  # 스트림 시작 전/도중의 예기치 못한 오류

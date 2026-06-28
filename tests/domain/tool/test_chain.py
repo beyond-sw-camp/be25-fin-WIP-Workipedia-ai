@@ -49,6 +49,37 @@ def test_success_with_valid_answer(chain):
     assert result.answer.references == []
 
 
+def test_tool_source_is_appended_to_llm_answer(chain):
+    data = {
+        "latitude": 37.5665,
+        "longitude": 126.978,
+        "temperature": 23.5,
+        "humidity": 76,
+        "windSpeed": 5.4,
+        "weatherCode": 1,
+        "source": "open-meteo",
+    }
+    with patch("app.domain.tool.chain.get_llm") as mock_llm:
+        mock_llm.return_value.invoke.return_value = _llm_response(
+            {"status": "ANSWER", "answer": "서울의 현재 기온은 23.5도입니다."}
+        )
+        result = chain.generate("서울 날씨 어때?", make_exec_result(data=data), custom_prompt=None)
+
+    assert result.status == RagStatus.SUCCESS
+    assert result.answer.answer == "서울의 현재 기온은 23.5도입니다.\n\n[출처: open-meteo]"
+
+
+def test_tool_source_is_not_duplicated(chain):
+    data = {"source": "open-meteo", "temperature": 23.5}
+    with patch("app.domain.tool.chain.get_llm") as mock_llm:
+        mock_llm.return_value.invoke.return_value = _llm_response(
+            {"status": "ANSWER", "answer": "서울의 현재 기온은 23.5도입니다.\n\n[출처: open-meteo]"}
+        )
+        result = chain.generate("서울 날씨 어때?", make_exec_result(data=data), custom_prompt=None)
+
+    assert result.answer.answer == "서울의 현재 기온은 23.5도입니다.\n\n[출처: open-meteo]"
+
+
 def test_retries_once_on_parse_failure(chain):
     bad = MagicMock()
     bad.content = "이건 JSON이 아님"
@@ -114,3 +145,94 @@ def test_answer_is_masked_before_returning(chain):
         result = chain.generate("질문", make_exec_result(), custom_prompt=None)
 
     assert result.answer.answer == "홍길동 [전화번호]"
+
+
+def test_employee_lookup_result_uses_fixed_format(chain):
+    data = {
+        "matched": True,
+        "matchType": "PHONE",
+        "employee": {
+            "employeeId": "SA001",
+            "loginId": "jinhyuk.kim",
+            "name": "김진혁",
+            "departmentName": "AI플랫폼팀",
+            "positionName": "매니저",
+            "email": "jinhyuk.kim@hanwha.com",
+            "phoneNumber": "010-4899-8954",
+            "status": "ACTIVE",
+        },
+        "source": "사용자 본인 정보 조회",
+    }
+
+    with patch("app.domain.tool.chain.get_llm") as mock_llm:
+        result = chain.generate("01048998954 누구야?", make_exec_result(data=data), custom_prompt=None)
+
+    assert result.status == RagStatus.SUCCESS
+    assert result.answer.answer == (
+        "해당 번호(010-4899-8954)는 **김진혁** 님(아이디: jinhyuk.kim)으로 조회됩니다.\n\n"
+        "- 소속: AI플랫폼팀\n"
+        "- 직급: 매니저\n"
+        "- 사번: SA001\n"
+        "- 이메일: jinhyuk.kim@hanwha.com\n\n"
+        "[출처: 사용자 본인 정보 조회]"
+    )
+    mock_llm.assert_not_called()
+
+
+def test_employee_lookup_not_matched_uses_fixed_message(chain):
+    data = {
+        "matched": False,
+        "matchType": "PHONE",
+        "employee": None,
+        "source": "사용자 본인 정보 조회",
+    }
+
+    with patch("app.domain.tool.chain.get_llm") as mock_llm:
+        result = chain.generate("00000000000 누구야?", make_exec_result(data=data), custom_prompt=None)
+
+    assert result.status == RagStatus.SUCCESS
+    assert result.answer.answer == "조회되는 임직원 정보를 찾지 못했습니다.\n\n[출처: 사용자 본인 정보 조회]"
+    mock_llm.assert_not_called()
+
+
+def test_leave_balance_result_uses_fixed_format(chain):
+    data = {
+        "employee": {
+            "employeeId": "SA001",
+            "name": "김진혁",
+            "departmentName": "AI플랫폼팀",
+        },
+        "year": 2026,
+        "leave": {
+            "grantedDays": 15.0,
+            "carriedOverDays": 0.0,
+            "adjustedDays": 0.0,
+            "usedDays": 2.0,
+            "scheduledDays": 0.0,
+            "pendingDays": 0.0,
+            "remainingDays": 13.0,
+            "expiresOn": "2026-12-31",
+        },
+        "source": "연차 잔여량 조회",
+        "asOfDate": "2026-06-28",
+    }
+
+    with patch("app.domain.tool.chain.get_llm") as mock_llm:
+        result = chain.generate("나 연차 몇개 남았어?", make_exec_result(data=data), custom_prompt=None)
+
+    assert result.status == RagStatus.SUCCESS
+    assert result.answer.answer == (
+        "**김진혁** 님의 2026년 잔여 연차는 **13일**입니다.\n\n"
+        "- 소속: AI플랫폼팀\n"
+        "- 사번: SA001\n"
+        "- 부여 연차: 15일\n"
+        "- 이월 연차: 0일\n"
+        "- 조정 연차: 0일\n"
+        "- 사용 연차: 2일\n"
+        "- 예정 연차: 0일\n"
+        "- 승인 대기 연차: 0일\n"
+        "- 만료일: 2026-12-31\n"
+        "- 기준일: 2026-06-28\n\n"
+        "[출처: 연차 잔여량 조회]"
+    )
+    mock_llm.assert_not_called()

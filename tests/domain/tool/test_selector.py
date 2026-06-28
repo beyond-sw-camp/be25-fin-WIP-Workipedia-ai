@@ -42,6 +42,19 @@ def test_returns_selection_when_valid(selector):
     assert result.inputs == {"employee_id": "E001"}
 
 
+def test_resolves_tool_name_to_tool_id(selector):
+    tool = make_tool(tool_id="4", name="lookup_employee")
+    with patch("app.domain.tool.selector.get_llm") as mock_llm:
+        mock_llm.return_value.invoke.return_value = _llm_response(
+            {"selected": True, "tool_id": "lookup_employee", "inputs": {"query": "01048998954"}}
+        )
+        result = selector.select("01048998954가 누구야?", [tool])
+
+    assert isinstance(result, ToolSelection)
+    assert result.tool_id == "4"
+    assert result.inputs == {"query": "01048998954"}
+
+
 def test_retries_once_on_json_parse_failure(selector):
     bad = MagicMock()
     bad.content = "이건 JSON이 아님"

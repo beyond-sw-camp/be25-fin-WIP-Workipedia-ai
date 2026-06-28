@@ -25,6 +25,7 @@ class ChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
     custom_prompt: str | None = Field(default=None, max_length=4000)
     session_context: list[SessionMessage] = Field(default_factory=list)
+    caller_employee_id: str | None = Field(default=None, max_length=100)
 
     @field_validator("question")
     @classmethod
