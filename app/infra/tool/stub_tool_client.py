@@ -8,5 +8,5 @@ class StubToolClient:
     def get_active_tools(self) -> list[ToolDefinition]:
         return []
 
-    def execute(self, tool_id: str, inputs: dict) -> ToolExecutionResult:
+    def execute(self, tool_id: str, inputs: dict, caller_employee_id: str | None = None) -> ToolExecutionResult:
         raise ProviderError("tool", "stub client — BE not connected")

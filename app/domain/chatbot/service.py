@@ -194,6 +194,7 @@ class ChatbotService:
         question: str,
         custom_prompt: str | None = None,
         session_context: list[SessionMessage] | None = None,
+        caller_employee_id: str | None = None,
     ) -> OrchestratorResult:
         followup_result = _resolve_ticket_confirmation(question, session_context or [])
         if followup_result is not None:
@@ -216,6 +217,7 @@ class ChatbotService:
             retrieval_query=retrieval_query,
             custom_prompt=custom_prompt,
             session_context=selected_context,
+            caller_employee_id=caller_employee_id,
         )
 
         # 검색/도구 결과가 없을 때만 티켓 오발행 방지 정책 적용
@@ -239,6 +241,7 @@ class ChatbotService:
         question: str,
         custom_prompt: str | None = None,
         session_context: list[SessionMessage] | None = None,
+        caller_employee_id: str | None = None,
     ) -> AsyncIterator[StreamEvent]:
         """2단계 스트리밍.
 
@@ -276,6 +279,7 @@ class ChatbotService:
             retrieval_query=retrieval_query,
             custom_prompt=custom_prompt,
             session_context=selected_context,
+            caller_employee_id=caller_employee_id,
         )
 
         step_history = list(result.step_history)

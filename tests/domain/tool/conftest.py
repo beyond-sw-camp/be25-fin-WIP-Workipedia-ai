@@ -52,7 +52,7 @@ class MockToolClient:
             raise self._raise_on_get
         return self._tools
 
-    def execute(self, tool_id: str, inputs: dict) -> ToolExecutionResult:
+    def execute(self, tool_id: str, inputs: dict, caller_employee_id: str | None = None) -> ToolExecutionResult:
         if self._raise_on_execute:
             raise self._raise_on_execute
         return self._execute_result
