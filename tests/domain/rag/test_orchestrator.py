@@ -236,13 +236,8 @@ async def test_all_steps_fail_returns_create_ticket():
 # ── TIMEOUT ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_timeout_stops_chain_immediately():
+async def test_timeout_records_no_result_and_continues_to_next_step():
     from app.domain.rag.orchestrator import RagOrchestrator
-    import asyncio
-
-    async def slow_run():
-        await asyncio.sleep(10)
-        return RagResult(status=RagStatus.SUCCESS, answer=_make_answer())
 
     step_a = MagicMock()
     step_a.step_name = "A"
@@ -254,9 +249,11 @@ async def test_timeout_stops_chain_immediately():
     orch = RagOrchestrator(steps=[step_a, step_b])
     result = await orch.run("질문")
 
-    assert result.status == RagStatus.ERROR
+    assert result.status == RagStatus.SUCCESS
+    assert result.route == "B"
+    assert result.step_history[0].status == RagStatus.NO_RESULT
     assert result.step_history[0].error_message == "timeout"
-    step_b.run.assert_not_called()
+    step_b.run.assert_called_once()
 
 
 # ── 예상치 못한 예외 전파 ───────────────────────────────────────────────────────
@@ -311,8 +308,8 @@ async def test_d_stage_no_result_falls_through_to_create_ticket():
     assert result.action == "CREATE_TICKET"
 
 
-async def test_d_stage_error_returns_error_immediately():
-    """D단계 RagResult(ERROR) → 오케스트레이터가 즉시 ERROR 반환 (CREATE_TICKET 아님)."""
+async def test_d_stage_error_falls_through_to_create_ticket():
+    """D단계 RagResult(ERROR) → NO_RESULT로 내려 사용자 질문 등록 흐름을 유지한다."""
     from app.domain.rag.orchestrator import RagOrchestrator
 
     error_step = MagicMock()
@@ -323,12 +320,13 @@ async def test_d_stage_error_returns_error_immediately():
     orch = RagOrchestrator(steps=[error_step])
     result = await orch.run("질문")
 
-    assert result.status == RagStatus.ERROR
-    assert result.action is None
+    assert result.status == RagStatus.NO_RESULT
+    assert result.action == "CREATE_TICKET"
+    assert result.step_history[0].status == RagStatus.ERROR
 
 
-async def test_d_stage_provider_error_returns_error_immediately():
-    """D단계 ProviderError → 오케스트레이터가 즉시 ERROR 반환 (CREATE_TICKET 아님)."""
+async def test_d_stage_provider_error_falls_through_to_create_ticket():
+    """D단계 ProviderError → NO_RESULT로 내려 사용자 질문 등록 흐름을 유지한다."""
     from app.domain.rag.orchestrator import RagOrchestrator
     from app.common.exceptions import ProviderError
 
@@ -340,7 +338,10 @@ async def test_d_stage_provider_error_returns_error_immediately():
     orch = RagOrchestrator(steps=[error_step])
     result = await orch.run("질문")
 
-    assert result.status == RagStatus.ERROR
+    assert result.status == RagStatus.NO_RESULT
+    assert result.action == "CREATE_TICKET"
+    assert result.step_history[0].status == RagStatus.NO_RESULT
+    assert result.step_history[0].error_message == "BE 연결 실패"
 
 
 async def test_abc_stage_error_continues_to_next_step():
