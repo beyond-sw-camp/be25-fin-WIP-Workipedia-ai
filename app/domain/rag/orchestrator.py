@@ -110,6 +110,33 @@ class KnowledgeRagStep:
         return result
 
 
+# ── 문서 근거 통합 단계: 매뉴얼+워키+지식(A+B+C) ──────────────────────────────
+# 폴백(A→B→C)이 아니라 세 출처 후보를 모두 합쳐 한 번 통합 reranking한 뒤
+# 답변을 1회 생성한다. 매뉴얼과 워키 근거를 함께 인용하기 위함.
+
+class DocumentRagStep:
+    step_name = "DOC"
+    timeout = STEP_TIMEOUT["DOC"]
+
+    def __init__(self) -> None:
+        self._service = RagService()
+        self._chain = RagChain()
+
+    def run(
+        self,
+        query: str,
+        retrieval_query: str,
+        custom_prompt: str | None,
+        session_context: list[SessionMessage],
+        caller_employee_id: str | None = None,
+    ) -> RagResult:
+        candidates = self._service.search_evidence(retrieval_query)
+        result = self._chain.generate(query, candidates, custom_prompt, session_context)
+        result.retrieval_top_score = self._service.last_retrieval_top_score
+        result.retrieval_candidate_count = self._service.last_retrieval_candidate_count
+        return result
+
+
 # ── D단계: Tool Calling ───────────────────────────────────────────────────────
 
 class ToolCallingStep:
@@ -140,7 +167,8 @@ class ToolCallingStep:
 class RagOrchestrator:
     def __init__(self, steps: list | None = None) -> None:
         self._steps = steps if steps is not None else [
-            ManualRagStep(), WorkiRagStep(), KnowledgeRagStep(), ToolCallingStep(),
+            # 매뉴얼+워키+지식을 하나의 통합 근거 단계로 묶고, 그 뒤 Tool(D)로 폴백한다.
+            DocumentRagStep(), ToolCallingStep(),
         ]
 
     async def run(
