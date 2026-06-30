@@ -214,9 +214,35 @@ RERANK_TOP_K = 5
 질문 임베딩
 -> Qdrant vector search
 -> RagCandidate 목록
--> Cross-Encoder reranking
+-> 게이트(1위 점수 >= retrieval_score_threshold)
+-> 후보별 컷(1위 - margin 미만 제외)
+-> 문서별 캡(source_id당 최대 rag_max_chunks_per_doc개)
+-> 조건부 Cross-Encoder reranking (survivors > RERANK_TOP_K 일 때만)
+-> 출처별 보장 + 상위 RERANK_TOP_K 선택
 -> RerankedCandidate 목록
 ```
+
+### 적응형(조건부) reranking
+
+reranker는 후보 풀을 다시 줄 세우는 도구이므로, 경합할 후보가 충분할 때만 값을 낸다.
+이를 위해 게이트 통과 후 다음 두 단계를 둔다.
+
+- **후보별 컷**: `1위 점수 - rag_candidate_score_margin` 미만 후보를 제외한다. 게이트가
+  '1위 점수'만 보는 all-or-nothing이라, 1위만 높고 나머지가 낮은 경우의 노이즈가 남기
+  때문이다. 컷 기준은 절대 임계치가 아니라 **1위 대비 상대 거리**다 — e5처럼 코사인이
+  좁은 띠(약 0.77~0.88)에 몰리는 임베딩에서는 절대값 컷이 무력하기 때문이다.
+- **문서별 캡**: 같은 문서(`source_id`)의 청크는 점수 상위 `rag_max_chunks_per_doc`개만
+  남긴다. 한 문서가 잘게 쪼개져 후보 풀을 도배하면 다른 문서·출처가 근거에 들어올 자리를
+  잃고, 아래 경합 판단도 가짜로 부풀려진다(한 문서 쪼개짐 ≠ 다출처 경합). 캡은 입력 순서를
+  보존하며 초과 청크만 제거한다. `0`이면 캡을 적용하지 않는다.
+- **조건부 rerank**: 컷·캡 이후 후보 수가 최종 보관 수(`RERANK_TOP_K`)보다 **많을 때만**
+  Cross-Encoder를 호출한다. 후보가 그 이하면 재정렬해도 버릴 후보가 없어 검색(코사인)
+  순서를 그대로 쓴다. 코퍼스가 커져 경합 후보가 늘면 reranker가 자동으로 활성화된다.
+  문서별 캡 덕분에 "경합"은 한 문서 쪼개짐이 아니라 **여러 문서의 실제 경합**을 뜻한다.
+- `rag_reranker_enabled`는 경합 규모와 무관하게 reranker를 끄는 마스터 스위치다.
+
+> 의미적(문서 간) 중복까지 다뤄야 하면 캡 다음 단계로 MMR을 얹는 것이 후속 과제다.
+> 캡은 `source_id` 기준 구조적 중복만 제거하고, 서로 다른 문서의 유사 내용은 잡지 못한다.
 
 `RagCandidate`는 Qdrant 원본 점수와 본문, metadata를 유지한다.
 
