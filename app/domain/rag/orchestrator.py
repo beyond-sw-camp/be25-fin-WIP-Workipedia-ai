@@ -134,6 +134,10 @@ class DocumentRagStep:
         result = self._chain.generate(query, candidates, custom_prompt, session_context)
         result.retrieval_top_score = self._service.last_retrieval_top_score
         result.retrieval_candidate_count = self._service.last_retrieval_candidate_count
+        # 출처 균형 모드: 근거 카드를 LLM 인용이 아니라 '선정된 출처별 후보'로 노출한다.
+        # 답변은 여전히 LLM이 근거 안에서 생성하지만, 카드는 임계치를 넘은 출처마다 표시된다.
+        if settings.rag_source_balanced and result.status == RagStatus.SUCCESS and result.answer:
+            result.answer.references = candidates
         return result
 
 

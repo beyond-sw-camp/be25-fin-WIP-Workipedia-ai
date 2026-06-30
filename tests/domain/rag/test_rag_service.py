@@ -342,16 +342,68 @@ def test_search_knowledge_uses_cosine_order_when_low_competition(service):
     ]
 
 
-# ── 근거 통합 검색(4개 출처)에서 출처별 보장 ─────────────────────────────────
+# ── 출처 균형 선정(_select_source_balanced) ─────────────────────────────────
 
-def test_search_evidence_keeps_source_quota_without_reranker(service):
-    """경합이 적어 reranker를 건너뛰어도, 출처별 최소 노출 보장은 유지된다."""
+def test_source_balanced_takes_top1_per_qualifying_source():
+    from app.domain.rag.service import _select_source_balanced
+
+    candidates = [
+        RagCandidate(candidate_id="MANUAL:1:0", text="매뉴얼1", score=0.90),
+        RagCandidate(candidate_id="MANUAL:1:1", text="매뉴얼2", score=0.88),
+        RagCandidate(candidate_id="WORKI:2:0", text="워키", score=0.85),
+        RagCandidate(candidate_id="KNOWLEDGE_DATA:3:0", text="지식화", score=0.83),
+        RagCandidate(candidate_id="MANUAL_KNOWLEDGE:4:0", text="수기지식", score=0.80),
+    ]
+    # 전체1위=0.90, margin=0.15 → floor=0.75 → 네 출처 모두 자격 통과
+    result = _select_source_balanced(candidates, chunks_per_source=1, inclusion_margin=0.15, max_per_doc=2)
+
+    ids = [r.candidate_id for r in result]
+    # 출처마다 top-1씩 (매뉴얼은 0.90 하나만), 점수 내림차순
+    assert ids == ["MANUAL:1:0", "WORKI:2:0", "KNOWLEDGE_DATA:3:0", "MANUAL_KNOWLEDGE:4:0"]
+
+
+def test_source_balanced_excludes_source_below_inclusion_margin():
+    from app.domain.rag.service import _select_source_balanced
+
+    candidates = [
+        RagCandidate(candidate_id="WORKI:1:0", text="워키", score=0.90),
+        RagCandidate(candidate_id="MANUAL:2:0", text="매뉴얼", score=0.88),
+        RagCandidate(candidate_id="MANUAL_KNOWLEDGE:3:0", text="수기지식", score=0.60),  # 전체1위-0.30
+    ]
+    # 전체1위=0.90, margin=0.15 → floor=0.75 → 수기지식(0.60) 탈락
+    result = _select_source_balanced(candidates, chunks_per_source=1, inclusion_margin=0.15, max_per_doc=2)
+
+    ids = [r.candidate_id for r in result]
+    assert ids == ["WORKI:1:0", "MANUAL:2:0"]
+    assert "MANUAL_KNOWLEDGE:3:0" not in ids
+
+
+def test_source_balanced_chunks_per_source_and_doc_cap():
+    from app.domain.rag.service import _select_source_balanced
+
+    candidates = [
+        # 매뉴얼: 같은 문서 3청크 + 다른 문서 1청크
+        RagCandidate(candidate_id="MANUAL:1:0", text="a", score=0.90),
+        RagCandidate(candidate_id="MANUAL:1:1", text="b", score=0.89),
+        RagCandidate(candidate_id="MANUAL:1:2", text="c", score=0.88),
+        RagCandidate(candidate_id="MANUAL:9:0", text="d", score=0.87),
+        RagCandidate(candidate_id="WORKI:2:0", text="워키", score=0.86),
+    ]
+    # chunks_per_source=2, 문서캡=1 → 매뉴얼은 서로 다른 문서 2개(1:0, 9:0), 워키 1개
+    result = _select_source_balanced(candidates, chunks_per_source=2, inclusion_margin=0.15, max_per_doc=1)
+
+    ids = [r.candidate_id for r in result]
+    assert ids == ["MANUAL:1:0", "MANUAL:9:0", "WORKI:2:0"]
+
+
+def test_search_evidence_returns_one_per_source_in_balanced_mode(service):
+    """search_evidence가 출처 균형 모드에서 자격 통과 출처마다 대표를 돌려준다."""
     from app.core.config import settings
 
     embedding = [0.1, 0.2, 0.3]
-    manual = [RagCandidate(candidate_id="MANUAL:1:0", text="매뉴얼", score=0.9,
+    manual = [RagCandidate(candidate_id="MANUAL:1:0", text="매뉴얼", score=0.90,
                            metadata={"source_type": "MANUAL"})]
-    worki = [RagCandidate(candidate_id="WORKI:2:0", text="워키", score=0.7,
+    worki = [RagCandidate(candidate_id="WORKI:2:0", text="워키", score=0.85,
                           metadata={"source_type": "WORKI"})]
     mock_reranker = MagicMock()
     mock_embeddings = MagicMock()
@@ -361,13 +413,14 @@ def test_search_evidence_keeps_source_quota_without_reranker(service):
         patch("app.domain.rag.service.rag_retriever") as mock_retriever,
         patch("app.domain.rag.service.get_reranker", return_value=mock_reranker),
         patch("app.domain.rag.service.get_embeddings", return_value=mock_embeddings),
-        patch.object(settings, "rag_reranker_enabled", True),
-        patch.object(settings, "rag_candidate_score_margin", 0.5),
-        patch.object(settings, "rag_max_chunks_per_doc", 3),
+        patch.object(settings, "rag_source_balanced", True),
+        patch.object(settings, "rag_source_inclusion_margin", 0.15),
+        patch.object(settings, "rag_chunks_per_source", 1),
+        patch.object(settings, "rag_max_chunks_per_doc", 2),
     ):
         mock_retriever.search_by_embedding.side_effect = [manual, worki, [], []]
         result = service.search_evidence("질문", rerank_top_k=3)
 
     mock_reranker.rerank.assert_not_called()
     ids = [r.candidate_id for r in result]
-    assert "MANUAL:1:0" in ids and "WORKI:2:0" in ids
+    assert ids == ["MANUAL:1:0", "WORKI:2:0"]
