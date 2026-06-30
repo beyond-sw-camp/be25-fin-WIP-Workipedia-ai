@@ -92,6 +92,41 @@ def _cap_per_document(candidates: list[RagCandidate], max_per_doc: int) -> list[
     return [candidate for candidate in candidates if candidate.candidate_id in keep_ids]
 
 
+def _source_type(candidate: RagCandidate) -> str:
+    """후보의 출처(source_type) — 논리 chunk ID의 첫 조각."""
+    return candidate.candidate_id.split(":", 1)[0]
+
+
+def _select_source_balanced(
+    candidates: list[RagCandidate],
+    chunks_per_source: int,
+    inclusion_margin: float,
+    max_per_doc: int,
+) -> list[RerankedCandidate]:
+    """'전체 1위 - inclusion_margin'을 넘는 각 출처에서 점수 상위 chunks_per_source개를 뽑는다.
+
+    글로벌 컷(전체 1위에서 멀면 출처 통째 탈락)과 달리, 각 출처를 독립적으로 판정해
+    임계치를 넘는 출처마다 대표 근거를 보장한다. 매뉴얼·워키·지식·수기지식이 모두 관련
+    있으면 각자의 top-N이 함께 답변 근거로 노출된다. 출처 내부에서는 문서별 캡을 먼저
+    적용해 한 문서가 그 출처의 자리를 독식하지 않게 한다.
+    """
+    global_top = max(candidate.score for candidate in candidates)
+    floor = global_top - inclusion_margin
+    by_source: dict[str, list[RagCandidate]] = {}
+    for candidate in candidates:
+        by_source.setdefault(_source_type(candidate), []).append(candidate)
+
+    selected: list[RagCandidate] = []
+    for source_candidates in by_source.values():
+        if max(candidate.score for candidate in source_candidates) < floor:
+            continue  # 이 출처의 1위가 임계치 미달 → 출처 제외
+        capped = _cap_per_document(source_candidates, max_per_doc)
+        selected += sorted(capped, key=lambda c: c.score, reverse=True)[:chunks_per_source]
+
+    selected.sort(key=lambda c: c.score, reverse=True)
+    return _from_retrieval(selected, len(selected))
+
+
 def _select_with_source_quota(
     reranked: list[RerankedCandidate],
     top_k: int,
@@ -249,7 +284,20 @@ class RagService:
         if not _passes_retrieval_gate("evidence", merged):
             return []
 
-        # 후보별 컷 + 경합 규모 기반 조건부 reranking. 출처별 최소 노출 보장을 함께 적용한다.
+        # 출처 균형 모드: 임계치를 넘는 출처마다 top-N을 뽑아 각 출처의 대표 근거를 보장한다.
+        if settings.rag_source_balanced:
+            final = _select_source_balanced(
+                merged,
+                settings.rag_chunks_per_source,
+                settings.rag_source_inclusion_margin,
+                settings.rag_max_chunks_per_doc,
+            )
+            if settings.latency_log_enabled:
+                logger.info("[latency] request_id=%s collection=evidence source_balanced=ON final=%d sources=%s",
+                    get_request_id(), len(final), [_source_type(c) for c in final])
+            return final
+
+        # (기존) 후보별 컷 + 경합 규모 기반 조건부 reranking. 출처별 최소 노출 보장을 함께 적용한다.
         return self._finalize_candidates(query, merged, rerank_top_k, "evidence", RERANK_PER_SOURCE_MIN)
 
     def search_knowledge(

@@ -43,6 +43,16 @@ class Settings(BaseSettings):
     # 같은 문서의 인접/중복 청크가 다른 문서·출처의 자리를 뺏지 않도록 점수 상위 N개만 남긴다.
     # 0이면 캡을 적용하지 않는다.
     rag_max_chunks_per_doc: int = Field(default=2, ge=0)
+    # 근거 통합(evidence) 검색의 출처 균형 모드.
+    # True면 글로벌 컷 대신 '임계치를 넘는 출처마다 top-N'을 뽑아, 각 출처(매뉴얼/워키/지식/
+    # 수기지식)의 대표 근거가 답변 카드에 함께 노출된다. 답변 카드는 LLM 인용이 아니라
+    # 선정된 출처별 후보로 표시된다(근거 ≠ 인용). False면 기존 관련도 우선(글로벌 컷)으로 동작.
+    rag_source_balanced: bool = True
+    # 출처 자격 판정 마진: 출처의 1위가 '전체 1위 - 이 값' 이상이면 그 출처를 포함한다.
+    # e5는 코사인이 좁은 띠에 몰리므로 절대 임계치 대신 1위 대비 상대 거리로 판정한다.
+    rag_source_inclusion_margin: float = Field(default=0.05, ge=0.0)
+    # 출처 균형 모드에서 자격을 통과한 각 출처에서 뽑을 후보 수.
+    rag_chunks_per_source: int = Field(default=1, ge=1)
 
     # 인프라 URL / Port
     ollama_base_url: str = "http://localhost:11434"
