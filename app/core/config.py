@@ -35,6 +35,14 @@ class Settings(BaseSettings):
     rag_answer_llm_timeout: float = Field(default=8.0, gt=0, lt=30.0)
     rag_retrieval_score_threshold: float = Field(default=0.50, ge=0.0)
     rag_reranker_enabled: bool = True
+    # 후보별 컷 마진: 1위 점수에서 이 값 이상 떨어진 후보는 근거에서 제외한다.
+    # e5처럼 코사인이 좁은 띠(0.77~0.88)에 몰리는 임베딩에서는 절대 임계치가 무력하므로
+    # '1위 대비 상대 거리'로 컷해야 모델 스케일에 휘둘리지 않는다.
+    rag_candidate_score_margin: float = Field(default=0.05, ge=0.0)
+    # 문서(source_id)당 후보 상한: 한 문서가 잘게 쪼개져 후보 풀을 도배하는 것을 막는다.
+    # 같은 문서의 인접/중복 청크가 다른 문서·출처의 자리를 뺏지 않도록 점수 상위 N개만 남긴다.
+    # 0이면 캡을 적용하지 않는다.
+    rag_max_chunks_per_doc: int = Field(default=2, ge=0)
 
     # 인프라 URL / Port
     ollama_base_url: str = "http://localhost:11434"

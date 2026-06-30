@@ -62,6 +62,36 @@ def _from_retrieval(candidates: list[RagCandidate], top_k: int) -> list[Reranked
     ]
 
 
+def _doc_key(candidate: RagCandidate) -> str:
+    """후보의 소속 문서 식별자(source_type:source_id)를 돌려준다.
+
+    논리 chunk ID는 `{source_type}:{source_id}:{chunk_index}` 형식이므로 앞 두 조각이
+    문서를 가리킨다. 형식이 어긋나면 candidate_id 전체를 키로 써 캡이 깨지지 않게 한다.
+    """
+    parts = candidate.candidate_id.split(":", 2)
+    return f"{parts[0]}:{parts[1]}" if len(parts) > 1 else candidate.candidate_id
+
+
+def _cap_per_document(candidates: list[RagCandidate], max_per_doc: int) -> list[RagCandidate]:
+    """문서(source_id)당 점수 상위 max_per_doc개만 남긴다.
+
+    한 문서가 잘게 쪼개져 후보 풀을 도배하면 다른 문서·출처가 근거에 들어올 자리를 잃고,
+    조건부 reranking의 '경합' 판단도 가짜로 부풀려진다. 점수 내림차순으로 훑으며 문서별
+    카운트가 상한에 닿으면 이후 청크는 버린다. 0이면 캡을 적용하지 않는다.
+    """
+    if max_per_doc <= 0:
+        return candidates
+    by_doc: dict[str, list[RagCandidate]] = {}
+    for candidate in candidates:
+        by_doc.setdefault(_doc_key(candidate), []).append(candidate)
+    keep_ids: set[str] = set()
+    for group in by_doc.values():
+        for candidate in sorted(group, key=lambda c: c.score, reverse=True)[:max_per_doc]:
+            keep_ids.add(candidate.candidate_id)
+    # 입력 순서를 보존하며 초과 청크만 제거한다(정렬·재배치는 하지 않는다).
+    return [candidate for candidate in candidates if candidate.candidate_id in keep_ids]
+
+
 def _select_with_source_quota(
     reranked: list[RerankedCandidate],
     top_k: int,
@@ -109,6 +139,59 @@ class RagService:
         self.last_retrieval_top_score: float | None = None
         self.last_retrieval_candidate_count = 0
 
+    def _finalize_candidates(
+        self,
+        query: str,
+        candidates: list[RagCandidate],
+        rerank_top_k: int,
+        collection_label: str,
+        per_source_min: int = 0,
+    ) -> list[RerankedCandidate]:
+        """게이트를 통과한 후보에 후보별 점수 컷과 경합 규모 기반 조건부 reranking을 적용한다.
+
+        1) 후보별 컷: '1위 점수 - margin' 미만 후보는 근거에서 제외한다.
+           (게이트는 '1위 점수'만 보므로, 1위만 높고 나머지가 낮은 경우의 노이즈를 여기서 제거한다.)
+           절대 임계치가 아니라 1위 대비 상대 거리로 컷한다 — e5처럼 코사인이 좁은 띠에
+           몰리는 임베딩에서 절대값 컷은 무력하기 때문이다.
+        2) 문서별 캡: 같은 문서(source_id)의 청크는 점수 상위 N개만 남긴다. 한 문서가
+           쪼개져 후보 풀을 도배하면 다른 출처가 들어올 자리를 잃고, 아래 경합 판단도
+           가짜로 부풀려진다(한 문서 쪼개짐 ≠ 다출처 경합).
+        3) 조건부 rerank: 컷·캡 이후 후보 수가 최종 보관 수(rerank_top_k)보다 많을 때만
+           Cross-Encoder를 호출한다. 후보가 그 이하면 재정렬해도 버릴 후보가 없어
+           순위를 바꿀 실익이 작으므로, 검색(코사인) 순서를 그대로 써 비용을 아낀다.
+           코퍼스가 커져 경합 후보가 늘면 reranker가 자동으로 활성화된다.
+        `rag_reranker_enabled`는 어떤 상황에서도 reranker를 끄는 마스터 스위치다.
+        """
+        top_score = max(candidate.score for candidate in candidates)
+        floor = top_score - settings.rag_candidate_score_margin
+        survivors = [candidate for candidate in candidates if candidate.score >= floor]
+        cut_count = len(candidates) - len(survivors)
+        before_cap = len(survivors)
+        survivors = _cap_per_document(survivors, settings.rag_max_chunks_per_doc)
+        capped_count = before_cap - len(survivors)
+        if not survivors:
+            return []
+
+        use_reranker = settings.rag_reranker_enabled and len(survivors) > rerank_top_k
+        if not use_reranker:
+            reason = "DISABLED" if not settings.rag_reranker_enabled else "LOW_COMPETITION"
+            if settings.latency_log_enabled:
+                logger.info("[latency] request_id=%s collection=%s reranker=SKIP(%s) survivors=%d cut=%d capped=%d keep=%d",
+                    get_request_id(), collection_label, reason, len(survivors), cut_count, capped_count, rerank_top_k)
+            ranked = _from_retrieval(sorted(survivors, key=lambda c: c.score, reverse=True), len(survivors))
+            return _select_with_source_quota(ranked, rerank_top_k, per_source_min)
+
+        # 경합 후보가 보관 수보다 많을 때만 Cross-Encoder로 통합 재정렬한다.
+        _rerank_start = time.perf_counter()
+        reranked = get_reranker().rerank(query, survivors, len(survivors))
+        final = _select_with_source_quota(reranked, rerank_top_k, per_source_min)
+        if settings.latency_log_enabled:
+            logger.info("[latency] request_id=%s collection=%s reranker=ON survivors=%d cut=%d capped=%d keep=%d rerank_ms=%.1f top3=%s",
+                get_request_id(), collection_label, len(survivors), cut_count, capped_count, rerank_top_k,
+                (time.perf_counter() - _rerank_start) * 1000,
+                [{"rank": c.rank, "rerank_score": round(c.score, 4), "retrieval_score": round(c.retrieval_score, 4), "text": _preview(c.text)} for c in final[:3]])
+        return final
+
     def search_and_rerank(
         self,
         query: str,
@@ -129,18 +212,8 @@ class RagService:
         if not _passes_retrieval_gate(collection_name, candidates):
             return []
 
-        if not settings.rag_reranker_enabled:
-            logger.info("[latency] request_id=%s collection=%s reranker=DISABLED", get_request_id(), collection_name)
-            return _from_retrieval(candidates, rerank_top_k)
-
-        # 2단계: Cross-Encoder로 후보 재정렬 후 상위 rerank_top_k개 반환
-        _rerank_start = time.perf_counter()
-        reranked = get_reranker().rerank(query, candidates, rerank_top_k)
-        if settings.latency_log_enabled:
-            logger.info("[latency] request_id=%s collection=%s rerank_input=%d rerank_output=%d rerank_ms=%.1f top3=%s",
-                get_request_id(), collection_name, len(candidates), len(reranked), (time.perf_counter() - _rerank_start) * 1000,
-                [{"rank": c.rank, "rerank_score": round(c.score, 4), "retrieval_score": round(c.retrieval_score, 4), "text": _preview(c.text)} for c in reranked[:3]])
-        return reranked
+        # 2단계: 후보별 컷 + 경합 규모 기반 조건부 reranking
+        return self._finalize_candidates(query, candidates, rerank_top_k, collection_name)
 
     def search_evidence(
         self,
@@ -176,22 +249,8 @@ class RagService:
         if not _passes_retrieval_gate("evidence", merged):
             return []
 
-        if not settings.rag_reranker_enabled:
-            logger.info("[latency] request_id=%s collection=evidence reranker=DISABLED", get_request_id())
-            # reranker 비활성 시에도 출처별 보장은 retrieval 순서로 적용한다
-            from_retrieval = _from_retrieval(merged, len(merged))
-            return _select_with_source_quota(from_retrieval, rerank_top_k, RERANK_PER_SOURCE_MIN)
-
-        # 합친 후보 '전체'를 한 번만 Cross-Encoder로 통합 재정렬한 뒤,
-        # 출처별 최소 노출 보장을 적용해 최종 rerank_top_k개를 고른다.
-        _rerank_start = time.perf_counter()
-        reranked_all = get_reranker().rerank(query, merged, len(merged))
-        final = _select_with_source_quota(reranked_all, rerank_top_k, RERANK_PER_SOURCE_MIN)
-        if settings.latency_log_enabled:
-            logger.info("[latency] request_id=%s collection=evidence rerank_input=%d final=%d per_source_min=%d rerank_ms=%.1f top=%s",
-                get_request_id(), len(merged), len(final), RERANK_PER_SOURCE_MIN, (time.perf_counter() - _rerank_start) * 1000,
-                [{"rank": c.rank, "src": c.metadata.get("source_type"), "rerank_score": round(c.score, 4), "retrieval_score": round(c.retrieval_score, 4), "text": _preview(c.text)} for c in final])
-        return final
+        # 후보별 컷 + 경합 규모 기반 조건부 reranking. 출처별 최소 노출 보장을 함께 적용한다.
+        return self._finalize_candidates(query, merged, rerank_top_k, "evidence", RERANK_PER_SOURCE_MIN)
 
     def search_knowledge(
         self,
@@ -216,14 +275,5 @@ class RagService:
         if not _passes_retrieval_gate("knowledge", merged):
             return []
 
-        if not settings.rag_reranker_enabled:
-            logger.info("[latency] request_id=%s collection=knowledge reranker=DISABLED", get_request_id())
-            return _from_retrieval(merged, rerank_top_k)
-
-        _rerank_start = time.perf_counter()
-        reranked = get_reranker().rerank(query, merged, rerank_top_k)
-        if settings.latency_log_enabled:
-            logger.info("[latency] request_id=%s collection=knowledge rerank_input=%d rerank_output=%d rerank_ms=%.1f top3=%s",
-                get_request_id(), len(merged), len(reranked), (time.perf_counter() - _rerank_start) * 1000,
-                [{"rank": c.rank, "rerank_score": round(c.score, 4), "retrieval_score": round(c.retrieval_score, 4), "text": _preview(c.text)} for c in reranked[:3]])
-        return reranked
+        # 후보별 컷 + 경합 규모 기반 조건부 reranking
+        return self._finalize_candidates(query, merged, rerank_top_k, "knowledge")
