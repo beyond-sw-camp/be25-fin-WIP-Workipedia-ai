@@ -35,6 +35,24 @@ class Settings(BaseSettings):
     rag_answer_llm_timeout: float = Field(default=8.0, gt=0, lt=30.0)
     rag_retrieval_score_threshold: float = Field(default=0.50, ge=0.0)
     rag_reranker_enabled: bool = True
+    # 후보별 컷 마진: 1위 점수에서 이 값 이상 떨어진 후보는 근거에서 제외한다.
+    # e5처럼 코사인이 좁은 띠(0.77~0.88)에 몰리는 임베딩에서는 절대 임계치가 무력하므로
+    # '1위 대비 상대 거리'로 컷해야 모델 스케일에 휘둘리지 않는다.
+    rag_candidate_score_margin: float = Field(default=0.05, ge=0.0)
+    # 문서(source_id)당 후보 상한: 한 문서가 잘게 쪼개져 후보 풀을 도배하는 것을 막는다.
+    # 같은 문서의 인접/중복 청크가 다른 문서·출처의 자리를 뺏지 않도록 점수 상위 N개만 남긴다.
+    # 0이면 캡을 적용하지 않는다.
+    rag_max_chunks_per_doc: int = Field(default=2, ge=0)
+    # 근거 통합(evidence) 검색의 출처 균형 모드.
+    # True면 글로벌 컷 대신 '임계치를 넘는 출처마다 top-N'을 뽑아, 각 출처(매뉴얼/워키/지식/
+    # 수기지식)의 대표 근거가 답변 카드에 함께 노출된다. 답변 카드는 LLM 인용이 아니라
+    # 선정된 출처별 후보로 표시된다(근거 ≠ 인용). False면 기존 관련도 우선(글로벌 컷)으로 동작.
+    rag_source_balanced: bool = True
+    # 출처 자격 판정 마진: 출처의 1위가 '전체 1위 - 이 값' 이상이면 그 출처를 포함한다.
+    # e5는 코사인이 좁은 띠에 몰리므로 절대 임계치 대신 1위 대비 상대 거리로 판정한다.
+    rag_source_inclusion_margin: float = Field(default=0.05, ge=0.0)
+    # 출처 균형 모드에서 자격을 통과한 각 출처에서 뽑을 후보 수.
+    rag_chunks_per_source: int = Field(default=1, ge=1)
 
     # 인프라 URL / Port
     ollama_base_url: str = "http://localhost:11434"
@@ -119,6 +137,11 @@ MASKING_EMAIL_ENABLED = False
 # ---------------------------------------------------------------------------
 RETRIEVAL_TOP_K = 20
 RERANK_TOP_K = 6
+# 근거 통합 검색에서 각 출처(매뉴얼/워키/지식)의 검색(코사인) 상위 N개는
+# Cross-Encoder 재정렬 결과와 무관하게 최종 후보에 반드시 포함한다.
+# Cross-Encoder가 특정 출처를 과소평가해 답변 근거에서 누락되는 것을 방지하기 위함.
+# 0이면 출처 보장 없이 순수 통합 reranking 순서만 사용한다.
+RERANK_PER_SOURCE_MIN = 1
 RERANKER_MODEL = "bongsoo/kpf-cross-encoder-v1"
 # Cross-Encoder가 가장 관련 있다고 판단한 1위 문서의 최소 통과 점수.
 # 이 점수는 0~1 확률이 아니라 모델의 raw logit이므로 0.0이 관련도 0%라는 뜻은 아니다.
@@ -153,4 +176,6 @@ STEP_TIMEOUT: dict[str, float] = {
     "B": 30.0,
     "C": 30.0,
     "D": 60.0,
+    # DOC: 매뉴얼+워키+지식 통합 근거 검색·통합 reranking·답변 생성 한 단계
+    "DOC": 45.0,
 }

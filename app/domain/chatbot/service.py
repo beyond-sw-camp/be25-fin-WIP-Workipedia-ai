@@ -56,7 +56,7 @@ _NEGATIVE_REPLIES = {
 
 def _has_document_candidates(result: OrchestratorResult) -> bool:
     for step in result.step_history:
-        if step.step in {"A", "B", "C"} and (step.retrieval_top_score or 0.0) >= settings.rag_retrieval_score_threshold:
+        if step.step in {"A", "B", "C", "DOC"} and (step.retrieval_top_score or 0.0) >= settings.rag_retrieval_score_threshold:
             return True
     return False
 

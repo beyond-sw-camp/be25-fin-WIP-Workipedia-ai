@@ -110,6 +110,37 @@ class KnowledgeRagStep:
         return result
 
 
+# ── 문서 근거 통합 단계: 매뉴얼+워키+지식(A+B+C) ──────────────────────────────
+# 폴백(A→B→C)이 아니라 세 출처 후보를 모두 합쳐 한 번 통합 reranking한 뒤
+# 답변을 1회 생성한다. 매뉴얼과 워키 근거를 함께 인용하기 위함.
+
+class DocumentRagStep:
+    step_name = "DOC"
+    timeout = STEP_TIMEOUT["DOC"]
+
+    def __init__(self) -> None:
+        self._service = RagService()
+        self._chain = RagChain()
+
+    def run(
+        self,
+        query: str,
+        retrieval_query: str,
+        custom_prompt: str | None,
+        session_context: list[SessionMessage],
+        caller_employee_id: str | None = None,
+    ) -> RagResult:
+        candidates = self._service.search_evidence(retrieval_query)
+        result = self._chain.generate(query, candidates, custom_prompt, session_context)
+        result.retrieval_top_score = self._service.last_retrieval_top_score
+        result.retrieval_candidate_count = self._service.last_retrieval_candidate_count
+        # 출처 균형 모드: 근거 카드를 LLM 인용이 아니라 '선정된 출처별 후보'로 노출한다.
+        # 답변은 여전히 LLM이 근거 안에서 생성하지만, 카드는 임계치를 넘은 출처마다 표시된다.
+        if settings.rag_source_balanced and result.status == RagStatus.SUCCESS and result.answer:
+            result.answer.references = candidates
+        return result
+
+
 # ── D단계: Tool Calling ───────────────────────────────────────────────────────
 
 class ToolCallingStep:
@@ -140,7 +171,8 @@ class ToolCallingStep:
 class RagOrchestrator:
     def __init__(self, steps: list | None = None) -> None:
         self._steps = steps if steps is not None else [
-            ManualRagStep(), WorkiRagStep(), KnowledgeRagStep(), ToolCallingStep(),
+            # 매뉴얼+워키+지식을 하나의 통합 근거 단계로 묶고, 그 뒤 Tool(D)로 폴백한다.
+            DocumentRagStep(), ToolCallingStep(),
         ]
 
     async def run(
