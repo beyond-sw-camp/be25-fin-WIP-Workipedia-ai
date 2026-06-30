@@ -119,6 +119,11 @@ MASKING_EMAIL_ENABLED = False
 # ---------------------------------------------------------------------------
 RETRIEVAL_TOP_K = 20
 RERANK_TOP_K = 6
+# 근거 통합 검색에서 각 출처(매뉴얼/워키/지식)의 검색(코사인) 상위 N개는
+# Cross-Encoder 재정렬 결과와 무관하게 최종 후보에 반드시 포함한다.
+# Cross-Encoder가 특정 출처를 과소평가해 답변 근거에서 누락되는 것을 방지하기 위함.
+# 0이면 출처 보장 없이 순수 통합 reranking 순서만 사용한다.
+RERANK_PER_SOURCE_MIN = 1
 RERANKER_MODEL = "bongsoo/kpf-cross-encoder-v1"
 # Cross-Encoder가 가장 관련 있다고 판단한 1위 문서의 최소 통과 점수.
 # 이 점수는 0~1 확률이 아니라 모델의 raw logit이므로 0.0이 관련도 0%라는 뜻은 아니다.
@@ -153,4 +158,6 @@ STEP_TIMEOUT: dict[str, float] = {
     "B": 30.0,
     "C": 30.0,
     "D": 60.0,
+    # DOC: 매뉴얼+워키+지식 통합 근거 검색·통합 reranking·답변 생성 한 단계
+    "DOC": 45.0,
 }

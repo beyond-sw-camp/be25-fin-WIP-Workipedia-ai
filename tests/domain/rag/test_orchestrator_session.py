@@ -27,7 +27,7 @@ async def test_orchestrator_passes_retrieval_query_to_step():
         custom_prompt=None,
         session_context=[],
     )
-    step.run.assert_called_once_with("며칠 전에?", "연차 신청 며칠 전에?", None, [])
+    step.run.assert_called_once_with("며칠 전에?", "연차 신청 며칠 전에?", None, [], None)
 
 
 @pytest.mark.asyncio
@@ -39,7 +39,7 @@ async def test_orchestrator_does_not_mask_internally():
     step.timeout = 5.0
     received = []
 
-    def capture_run(query, retrieval_query, custom_prompt, session_context):
+    def capture_run(query, retrieval_query, custom_prompt, session_context, caller_employee_id=None):
         received.append((query, retrieval_query))
         return RagResult(status=RagStatus.SUCCESS, answer=MagicMock(references=[]))
 

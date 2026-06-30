@@ -242,7 +242,7 @@ async def test_timeout_records_no_result_and_continues_to_next_step():
     step_a = MagicMock()
     step_a.step_name = "A"
     step_a.timeout = 0.01  # 10ms — 의도적 timeout
-    step_a.run = MagicMock(side_effect=lambda q, rq, p, sc: __import__('time').sleep(1) or RagResult(status=RagStatus.SUCCESS, answer=_make_answer()))
+    step_a.run = MagicMock(side_effect=lambda q, rq, p, sc, cid=None: __import__('time').sleep(1) or RagResult(status=RagStatus.SUCCESS, answer=_make_answer()))
 
     step_b = _make_step("B", RagResult(status=RagStatus.SUCCESS, answer=_make_answer()))
 
@@ -273,8 +273,9 @@ async def test_unexpected_exception_propagates():
 
 # ── 기본 단계 초기화 ────────────────────────────────────────────────────────────
 
-def test_default_steps_are_four():
-    from app.domain.rag.orchestrator import RagOrchestrator, ManualRagStep, WorkiRagStep, KnowledgeRagStep, ToolCallingStep
+def test_default_steps_are_document_then_tool():
+    # 매뉴얼+워키+지식(A+B+C)을 하나의 통합 근거 단계로 묶고, 그 뒤 Tool(D)로 폴백한다.
+    from app.domain.rag.orchestrator import RagOrchestrator, DocumentRagStep, ToolCallingStep
 
     with (
         patch("app.domain.rag.orchestrator.RagService"),
@@ -283,11 +284,9 @@ def test_default_steps_are_four():
     ):
         orch = RagOrchestrator()
 
-    assert len(orch._steps) == 4
-    assert isinstance(orch._steps[0], ManualRagStep)
-    assert isinstance(orch._steps[1], WorkiRagStep)
-    assert isinstance(orch._steps[2], KnowledgeRagStep)
-    assert isinstance(orch._steps[3], ToolCallingStep)
+    assert len(orch._steps) == 2
+    assert isinstance(orch._steps[0], DocumentRagStep)
+    assert isinstance(orch._steps[1], ToolCallingStep)
 
 
 # ── D단계 ToolCallingStep 관련 테스트 ─────────────────────────────────────────
