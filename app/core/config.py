@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     rag_answer_llm_timeout: float = Field(default=8.0, gt=0, lt=30.0)
     rag_retrieval_score_threshold: float = Field(default=0.50, ge=0.0)
     rag_reranker_enabled: bool = True
+    # Cross-Encoder 리랭커 모델. bge-reranker-v2-m3가 관련/무관 분리력은 훨씬 좋지만(무관≈0.0)
+    # 2GB·CPU 추론이 느려 kpf-cross-encoder-v1로 롤백. kpf는 정답·무관 점수가 좁은 양수 띠에
+    # 몰려(정답 0.3~0.7 / 무관 0.08~0.29) 절대 임계값이 질문마다 불안정한 점을 감안해야 한다.
+    rag_reranker_model: str = "bongsoo/kpf-cross-encoder-v1"
     # 후보별 컷 마진: 1위 점수에서 이 값 이상 떨어진 후보는 근거에서 제외한다.
     # e5처럼 코사인이 좁은 띠(0.77~0.88)에 몰리는 임베딩에서는 절대 임계치가 무력하므로
     # '1위 대비 상대 거리'로 컷해야 모델 스케일에 휘둘리지 않는다.
@@ -48,9 +52,11 @@ class Settings(BaseSettings):
     # 수기지식)의 대표 근거가 답변 카드에 함께 노출된다. 답변 카드는 LLM 인용이 아니라
     # 선정된 출처별 후보로 표시된다(근거 ≠ 인용). False면 기존 관련도 우선(글로벌 컷)으로 동작.
     rag_source_balanced: bool = True
-    # 출처 자격 판정 마진: 출처의 1위가 '전체 1위 - 이 값' 이상이면 그 출처를 포함한다.
-    # e5는 코사인이 좁은 띠에 몰리므로 절대 임계치 대신 1위 대비 상대 거리로 판정한다.
-    rag_source_inclusion_margin: float = Field(default=0.05, ge=0.0)
+    # 출처 자격 판정(Cross-Encoder): 출처의 rerank 최고 점수(raw logit)가 이 값 이상이면 노출한다.
+    # 코사인은 무관 문서도 좁은 띠(~0.83)에 몰려 '코사인 1위 강제 삽입'이 노이즈를 못 걸렀다.
+    # kpf 리랭커 기준 정답 0.3~0.7 / 노이즈 0.08~0.29로 분리력이 약해 깨끗한 컷은 불가능하다.
+    # 0.15는 정답을 안 자르는 선에서 낮은 노이즈(~0.1)만 걷어내는 타협값. 실제 질문셋으로 재튜닝 대상.
+    rag_source_rerank_threshold: float = Field(default=0.15)
     # 출처 균형 모드에서 자격을 통과한 각 출처에서 뽑을 후보 수.
     rag_chunks_per_source: int = Field(default=1, ge=1)
 
@@ -142,12 +148,12 @@ RERANK_TOP_K = 6
 # Cross-Encoder가 특정 출처를 과소평가해 답변 근거에서 누락되는 것을 방지하기 위함.
 # 0이면 출처 보장 없이 순수 통합 reranking 순서만 사용한다.
 RERANK_PER_SOURCE_MIN = 1
-RERANKER_MODEL = "bongsoo/kpf-cross-encoder-v1"
-# Cross-Encoder가 가장 관련 있다고 판단한 1위 문서의 최소 통과 점수.
-# 이 점수는 0~1 확률이 아니라 모델의 raw logit이므로 0.0이 관련도 0%라는 뜻은 아니다.
-# 1위 점수가 0.0 미만이면 근거가 부족하다고 보고 답변을 생성하지 않고 NO_RESULT를 반환한다.
-# 현재 0.0은 평가셋 확보 전 임시 기준이며, 실제 질문/문서 평가 결과에 따라 조정해야 한다.
-RERANK_SCORE_THRESHOLD = 0.0
+# 리랭커 모델명은 settings.rag_reranker_model(RAG_RERANKER_MODEL)로 관리한다.
+# Cross-Encoder가 가장 관련 있다고 판단한 1위 문서의 최소 통과 점수(raw logit).
+# kpf 기준 정답은 0.3~0.7, 노이즈는 0.08~0.29라 정답이 0.3 근처까지 내려올 수 있어,
+# 임계값을 높이면 정답도 잘려 NO_RESULT가 빈발한다. 0.15는 정답을 지키는 선의 타협값이며
+# 1위가 이 값 미만이면 근거 부족으로 보고 NO_RESULT를 반환한다. 실제 평가셋으로 조정한다.
+RERANK_SCORE_THRESHOLD = 0.15
 
 # ---------------------------------------------------------------------------
 # 티켓 부서 라우팅 파라미터

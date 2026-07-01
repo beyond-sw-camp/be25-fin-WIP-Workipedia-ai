@@ -98,33 +98,43 @@ def _source_type(candidate: RagCandidate) -> str:
 
 
 def _select_source_balanced(
+    query: str,
     candidates: list[RagCandidate],
     chunks_per_source: int,
-    inclusion_margin: float,
+    source_rerank_threshold: float,
     max_per_doc: int,
 ) -> list[RerankedCandidate]:
-    """'전체 1위 - inclusion_margin'을 넘는 각 출처에서 점수 상위 chunks_per_source개를 뽑는다.
+    """Cross-Encoder 재정렬 점수로 출처 자격을 판정한 뒤, 자격을 통과한 각 출처에서
+    rerank 상위 chunks_per_source개를 대표 근거로 뽑는다.
 
-    글로벌 컷(전체 1위에서 멀면 출처 통째 탈락)과 달리, 각 출처를 독립적으로 판정해
-    임계치를 넘는 출처마다 대표 근거를 보장한다. 매뉴얼·워키·지식·수기지식이 모두 관련
-    있으면 각자의 top-N이 함께 답변 근거로 노출된다. 출처 내부에서는 문서별 캡을 먼저
-    적용해 한 문서가 그 출처의 자리를 독식하지 않게 한다.
+    bge-m3/e5 코사인은 무관 문서도 좁은 띠(~0.83)에 몰려 '전체 1위 - margin' 식의
+    코사인 컷으로는 무관 출처(회계규정·와이파이 등)를 걸러내지 못한다. Cross-Encoder는
+    무관 문서를 음수 logit으로 확실히 떨어뜨리므로 출처 자격을 rerank 점수로 판정한다.
+    단, rerank 최고 후보가 속한 출처는 임계치 미달이어도 보존해 후보가 있는데 근거가
+    통째로 비는 것을 막는다(최종 관련도 판정은 chain의 NO_RESULT 게이트가 담당한다).
+    출처 내부에서는 문서별 캡을 먼저 적용해 한 문서가 그 출처 자리를 독식하지 않게 한다.
     """
-    global_top = max(candidate.score for candidate in candidates)
-    floor = global_top - inclusion_margin
-    by_source: dict[str, list[RagCandidate]] = {}
-    for candidate in candidates:
+    reranked = get_reranker().rerank(query, candidates, len(candidates))
+    if not reranked:
+        return []
+    best_source = _source_type(reranked[0])  # rerank 1위 출처는 무조건 보존
+
+    by_source: dict[str, list[RerankedCandidate]] = {}
+    for candidate in reranked:
         by_source.setdefault(_source_type(candidate), []).append(candidate)
 
-    selected: list[RagCandidate] = []
-    for source_candidates in by_source.values():
-        if max(candidate.score for candidate in source_candidates) < floor:
-            continue  # 이 출처의 1위가 임계치 미달 → 출처 제외
+    selected: list[RerankedCandidate] = []
+    for source, source_candidates in by_source.items():
+        source_best = max(candidate.score for candidate in source_candidates)
+        if source_best < source_rerank_threshold and source != best_source:
+            continue  # Cross-Encoder 기준 무관 출처 → 제외
         capped = _cap_per_document(source_candidates, max_per_doc)
         selected += sorted(capped, key=lambda c: c.score, reverse=True)[:chunks_per_source]
 
     selected.sort(key=lambda c: c.score, reverse=True)
-    return _from_retrieval(selected, len(selected))
+    for idx, candidate in enumerate(selected):
+        candidate.rank = idx + 1
+    return selected
 
 
 def _select_with_source_quota(
@@ -284,17 +294,19 @@ class RagService:
         if not _passes_retrieval_gate("evidence", merged):
             return []
 
-        # 출처 균형 모드: 임계치를 넘는 출처마다 top-N을 뽑아 각 출처의 대표 근거를 보장한다.
+        # 출처 균형 모드: Cross-Encoder 재정렬 점수로 자격을 통과한 출처마다 대표 근거를 보장한다.
         if settings.rag_source_balanced:
             final = _select_source_balanced(
+                query,
                 merged,
                 settings.rag_chunks_per_source,
-                settings.rag_source_inclusion_margin,
+                settings.rag_source_rerank_threshold,
                 settings.rag_max_chunks_per_doc,
             )
             if settings.latency_log_enabled:
-                logger.info("[latency] request_id=%s collection=evidence source_balanced=ON final=%d sources=%s",
-                    get_request_id(), len(final), [_source_type(c) for c in final])
+                logger.info("[latency] request_id=%s collection=evidence source_balanced=ON(rerank) final=%d sources=%s top3=%s",
+                    get_request_id(), len(final), [_source_type(c) for c in final],
+                    [{"src": _source_type(c), "rerank": round(c.score, 4), "cos": round(c.retrieval_score, 4), "text": _preview(c.text)} for c in final[:3]])
             return final
 
         # (기존) 후보별 컷 + 경합 규모 기반 조건부 reranking. 출처별 최소 노출 보장을 함께 적용한다.

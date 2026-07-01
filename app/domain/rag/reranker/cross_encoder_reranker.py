@@ -3,13 +3,14 @@ from functools import lru_cache
 from sentence_transformers import CrossEncoder
 
 from app.common.exceptions import ProviderError, provider_call
-from app.core.config import RERANKER_MODEL
+from app.core.config import settings
 from app.domain.rag.schemas import RagCandidate, RerankedCandidate
 from .base import BaseReranker
 
 
 class CrossEncoderReranker(BaseReranker):
-    def __init__(self, model_name: str = RERANKER_MODEL) -> None:
+    def __init__(self, model_name: str | None = None) -> None:
+        model_name = model_name or settings.rag_reranker_model
         try:
             self._model = CrossEncoder(model_name)
         except Exception as e:
